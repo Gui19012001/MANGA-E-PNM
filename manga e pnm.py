@@ -338,7 +338,7 @@ def pagina_checklist():
     df_apont = df_apont[df_apont["data_hora"].dt.date == hoje]
 
     feitos = set(
-        zip(df_check["numero_serie"], df_check["tipo"])
+        zip(df_check["numero_serie"], df_check["tipo_producao"])
     ) if not df_check.empty else set()
 
     pendentes = [
