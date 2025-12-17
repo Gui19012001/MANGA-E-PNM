@@ -337,14 +337,16 @@ def pagina_checklist():
     hoje = datetime.datetime.now(TZ).date()
     df_apont = df_apont[df_apont["data_hora"].dt.date == hoje]
 
+    # Conjunto de checklists já feitos hoje (usando 'tipo_producao')
     feitos = set(
         zip(df_check["numero_serie"], df_check["tipo_producao"])
     ) if not df_check.empty else set()
 
+    # Pendentes: aqueles apontados hoje mas ainda sem checklist
     pendentes = [
-        (r.numero_serie, r.tipo)
+        (r.numero_serie, r.tipo_producao)  # aqui também muda para tipo_producao
         for r in df_apont.itertuples()
-        if (r.numero_serie, r.tipo) not in feitos
+        if (r.numero_serie, r.tipo_producao) not in feitos
     ]
 
     if not pendentes:
@@ -357,7 +359,9 @@ def pagina_checklist():
         format_func=lambda x: f"{x[0]} - {x[1]}"
     )
 
-    checklist_qualidade(numero_serie, tipo)
+    # Passando numero_serie e tipo para a função do checklist
+    checklist_qualidade_manga_pnm(numero_serie, st.session_state.get("usuario", "Operador_Logado"))
+
 
 
 # ==============================
