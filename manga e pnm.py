@@ -93,7 +93,6 @@ def salvar_checklist(numero_serie, tipo_producao, dados, usuario):
                 "numero_serie": numero_serie,
                 "item": item,
                 "status": info["status"],
-                "observacao": info["obs"],
                 "usuario": usuario,
                 "tipo_producao": tipo_producao,
                 "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
