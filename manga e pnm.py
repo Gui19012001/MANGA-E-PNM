@@ -60,7 +60,7 @@ def carregar_apontamentos():
     data = supabase.table("apontamentos_manga_pnm") \
         .select("*") \
         .order("data_hora", desc=True) \
-        .limit(1000) \
+        .limit(20) \
         .execute()
 
     df = pd.DataFrame(data.data)
@@ -162,11 +162,8 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
     with st.form(key=f"form_checklist_{numero_serie}", clear_on_submit=False):
         for i, pergunta in enumerate(perguntas, start=1):
             cols = st.columns([7, 2, 2])
-
-            # Pergunta
             cols[0].markdown(f"**{i}. {pergunta}**")
 
-            # Status padrão
             resultados[i] = cols[1].radio(
                 "",
                 ["✅", "❌", "🟡"],
@@ -176,7 +173,6 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 label_visibility="collapsed"
             )
 
-            # Complementos por pergunta
             if i in opcoes_modelos:
                 complementos[i] = cols[2].selectbox(
                     "Modelo",
@@ -184,15 +180,13 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                     key=f"modelo_{numero_serie}_{i}",
                     label_visibility="collapsed"
                 )
-
-            elif i in [11, 15]:  # texto livre
+            elif i in [11, 15]:
                 complementos[i] = cols[2].text_input(
                     "",
                     key=f"texto_{numero_serie}_{i}",
                     label_visibility="collapsed"
                 )
-
-            elif i in [12, 13, 14]:  # Sim / Não
+            elif i in [12, 13, 14]:
                 complementos[i] = cols[2].selectbox(
                     "",
                     ["", "Sim", "Não"],
@@ -209,14 +203,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
-            # 🔒 trava contra duplo envio
-            if st.session_state.get("salvando_checklist"):
-                st.warning("⏳ Salvamento em andamento, aguarde...")
-                return
-
-            st.session_state["salvando_checklist"] = True
             registros = []
-
             for i in resultados:
                 item_final = item_keys[i]
                 if complementos.get(i):
@@ -231,17 +218,11 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                     "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
                 })
 
-            try:
-                supabase.table("checklists_manga_pnm_detalhes") \
-                    .insert(registros) \
-                    .execute()
+            supabase.table("checklists_manga_pnm_detalhes").insert(registros).execute()
 
-                st.success("✅ Checklist salvo com sucesso")
-                st.session_state["salvando_checklist"] = False
+            st.session_state["checklist_salvo"] = True
+            st.rerun()
 
-            except Exception as e:
-                st.session_state["salvando_checklist"] = False
-                st.error(f"❌ Erro ao salvar checklist: {e}")
 # ==============================
 # PÁGINA CHECKLIST
 # ==============================
@@ -256,24 +237,28 @@ def pagina_checklist():
         st.info("Nenhum apontamento hoje")
         return
 
-    df_checks = supabase.table("checklists_manga_pnm_detalhes").select("numero_serie").execute()
-    df_checks = pd.DataFrame(df_checks.data)
+    checklists = supabase.table("checklists_manga_pnm_detalhes") \
+        .select("numero_serie") \
+        .execute()
 
-    series_com_check = set(df_checks["numero_serie"].unique()) if not df_checks.empty else set()
-    pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_check)]
+    series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
+    df_pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_checklist)]
 
-    if pendentes.empty:
+    if df_pendentes.empty:
         st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
         return
 
-    numero_serie = st.selectbox("Selecione a série", pendentes["numero_serie"].unique())
+    if st.session_state.get("checklist_salvo"):
+        st.session_state["serie_selecionada"] = None
+        st.session_state["checklist_salvo"] = False
 
-    df_linha = pendentes[pendentes["numero_serie"] == numero_serie]
-    if df_linha.empty:
-        st.rerun()
-        return
+    numero_serie = st.selectbox(
+        "Selecione a série",
+        df_pendentes["numero_serie"].unique(),
+        key="serie_selecionada"
+    )
 
-    linha = df_linha.iloc[0]
+    linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
 
     checklist_qualidade_manga_pnm(
         numero_serie,
@@ -283,21 +268,18 @@ def pagina_checklist():
     )
 
 # ==============================
-# APP PRINCIPAL
+# APP
 # ==============================
 def app():
     if "usuario" not in st.session_state:
         st.session_state["usuario"] = "Operador_Logado"
 
     menu = st.sidebar.radio("Menu", ["Apontamento", "Checklist"])
-
     if menu == "Apontamento":
         pagina_apontamento()
     else:
         pagina_checklist()
 
-# ==============================
-# EXECUÇÃO
-# ==============================
 if __name__ == "__main__":
     app()
+
