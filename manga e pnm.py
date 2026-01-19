@@ -246,12 +246,13 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error(f"❌ Erro ao salvar checklist: {e}")
 
 # ==============================
-# PÁGINA APONTAMENTO
+# PÁGINA CHECKLIST
 # ==============================
+
 def pagina_checklist():
+
     st.title("🧾 Checklist de Qualidade")
 
-    # 🔹 Apontamentos
     df_apont = carregar_apontamentos()
     hoje = datetime.datetime.now(TZ).date()
 
@@ -261,34 +262,22 @@ def pagina_checklist():
         st.info("Nenhum apontamento hoje")
         return
 
-    # 🔹 Buscar séries que JÁ POSSUEM checklist
-    try:
-        resp = supabase.table("checklists_manga_pnm_detalhes") \
-            .select("numero_serie") \
-            .execute()
-    except Exception as e:
-        st.error("❌ Erro ao consultar checklists no Supabase")
-        st.exception(e)
-        return
+    resp = supabase.table("checklists_manga_pnm_detalhes") \
+        .select("numero_serie") \
+        .execute()
 
-    # 🔹 DISTINCT manual (tabela tem várias linhas por série)
-    series_com_checklist = set()
+    series_com_check = {
+        r["numero_serie"] for r in resp.data
+    } if resp.data else set()
 
-    if resp.data:
-        series_com_checklist = {
-            r["numero_serie"] for r in resp.data if r.get("numero_serie")
-        }
-
-    # 🔹 Remove do apontamento as séries já finalizadas
     df_pendentes = df_hoje[
-        ~df_hoje["numero_serie"].isin(series_com_checklist)
+        ~df_hoje["numero_serie"].isin(series_com_check)
     ]
 
     if df_pendentes.empty:
         st.success("✅ Todos os apontamentos de hoje já possuem checklist")
         return
 
-    # 🔹 Seleção da série
     numero_serie = st.selectbox(
         "Selecione a série pendente",
         sorted(df_pendentes["numero_serie"].unique())
@@ -302,7 +291,6 @@ def pagina_checklist():
         usuario=st.session_state.get("usuario", "Operador_Logado"),
         op=linha["op"]
     )
-
 
 
 # ==============================
