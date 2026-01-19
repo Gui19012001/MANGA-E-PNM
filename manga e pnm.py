@@ -237,21 +237,31 @@ def pagina_checklist():
         st.info("Nenhum apontamento hoje")
         return
 
+    hoje_str = hoje.strftime("%Y-%m-%d")
+
+    # 🔥 BUSCA CHECKLISTS DE HOJE (COM TIPO)
     checklists = supabase.table("checklists_manga_pnm_detalhes") \
-        .select("numero_serie") \
+        .select("numero_serie, tipo_producao") \
+        .gte("data_hora", f"{hoje_str}T00:00:00") \
+        .lte("data_hora", f"{hoje_str}T23:59:59") \
         .execute()
 
-    series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
-    df_pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_checklist)]
+    if checklists.data:
+        df_check = pd.DataFrame(checklists.data)
+
+        # 🔥 REMOVE APENAS SE (SERIE + TIPO) JÁ EXISTIR
+        df_pendentes = df_hoje.merge(
+            df_check,
+            on=["numero_serie", "tipo_producao"],
+            how="left",
+            indicator=True
+        ).query('_merge == "left_only"').drop(columns="_merge")
+    else:
+        df_pendentes = df_hoje.copy()
 
     if df_pendentes.empty:
         st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
         return
-
-    # 🔄 reset do selectbox após salvamento
-    if st.session_state.get("checklist_salvo"):
-        st.session_state["serie_selecionada"] = None
-        st.session_state["checklist_salvo"] = False
 
     numero_serie = st.selectbox(
         "Selecione a série",
@@ -259,20 +269,21 @@ def pagina_checklist():
         key="serie_selecionada"
     )
 
-    # 🛡️ proteção contra rerun / valor inválido
-    linha_df = df_pendentes[df_pendentes["numero_serie"] == numero_serie]
+    df_sel = df_pendentes[df_pendentes["numero_serie"] == numero_serie]
 
-    if linha_df.empty:
+    if df_sel.empty:
+        st.warning("Série já inspecionada")
         return
 
-    linha = linha_df.iloc[0]
+    linha = df_sel.iloc[0]
 
     checklist_qualidade_manga_pnm(
         numero_serie,
-        linha["tipo_producao"],
+        linha["tipo_producao"],  # 🔥 AGORA É DECISIVO
         st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
+
 
 
 # ==============================
