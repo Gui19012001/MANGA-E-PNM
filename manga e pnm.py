@@ -104,70 +104,36 @@ def processar_leitura():
     st.session_state["input_leitor"] = ""
 
 # ==============================
-# CHECKLIST DE QUALIDADE – MANGA / PNM
+# CHECKLIST DE QUALIDADE
 # ==============================
-
-def salvar_checklist_manga_pnm_detalhes(
-    numero_serie: str,
-    tipo_producao: str,
-    respostas: dict,
-    usuario: str,
-    op: str
-):
-    erros = []
-
-    for item, dados in respostas.items():
-        payload = {
-            "numero_serie": numero_serie,
-            "tipo_producao": tipo_producao,
-            "op": op,
-            "usuario": usuario,
-            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "item": item,
-            "status": dados["status"],
-            "observacao": dados.get("obs")
-        }
-
-        try:
-            supabase.table("checklists_manga_pnm_detalhes").insert(payload).execute()
-        except Exception as e:
-            erros.append(f"{item}: {str(e)}")
-
-    if erros:
-        return False, "; ".join(erros)
-
-    return True, None
-
-
 def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
-
     st.markdown(
         f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}"
     )
 
     perguntas = [
         "Etiqueta do produto – As informações estão corretas / legíveis conforme modelo e gravação do eixo?",
-        "Placa do Inmetro está correta / fixada e legível? Número corresponde à viga?",
-        "Etiqueta do ABS está conforme? Teste do ABS aprovado?",
-        "Rodagem – tipo correto?",
+        "Placa do Inmetro está correta / fixada e legível? Número corresponde à viga? Gravação do número de série da viga está legível e pintada?",
+        "Etiqueta do ABS está conforme? Com número de série compatível ao da viga? Teste do ABS está aprovado?",
+        "Rodagem – tipo correto? Especifique o modelo",
         "Graxeiras e Anéis elásticos estão em perfeito estado?",
-        "Sistema de atuação correto? (Spring ou Cuíca)",
-        "Catraca do freio correta?",
-        "Tampa do cubo correta e sem avarias?",
-        "Pintura do eixo conforme padrão?",
-        "Cordões de solda conformes?",
-        "As caixas estão corretas?",
+        "Sistema de atuação correto? Springs ou cuícas em perfeitas condições? Especifique o modelo:",
+        "Catraca do freio correta? Especifique modelo",
+        "Tampa do cubo correta, livre de avarias e pintura nos critérios? As tampas dos cubos dos ambos os lados são iguais?",
+        "Pintura do eixo livre de oxidação, isento de escorrimento, pontos sem tinta e camada conforme padrão?",
+        "Os cordões de solda do eixo estão conformes?",
+        "As caixas estão corretas? Escreva qual o modelo:",
         "Etiqueta pede suspensor?",
         "Etiqueta pede Suporte da Bolsa?",
         "Etiqueta pede Mão Francesa?"
     ]
 
     if tipo_producao == "MANGA":
-        perguntas.append("Grau do Manga conforme etiqueta?")
+        perguntas.append("Grau do Manga conforme etiqueta do produto? Escreva qual o Grau:")
 
     item_keys = {
         1: "ETIQUETA",
-        2: "PLACA_INMETRO",
+        2: "PLACA_IMETRO_E_NUMERO_SERIE",
         3: "TESTE_ABS",
         4: "RODAGEM",
         5: "GRAXEIRAS",
@@ -177,135 +143,204 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         9: "PINTURA_EIXO",
         10: "SOLDA",
         11: "CAIXAS",
-        12: "SUSPENSOR",
-        13: "SUPORTE_BOLSA",
-        14: "MAO_FRANCESA",
-        15: "GRAU_MANGA"
+        12: "FALTA SUSPENSOR",
+        13: "FALTA SPT_BOLSA",
+        14: "FALTA MAO_FRANCESA",
+        15: "GRAU DIVERGENTE"
     }
 
-    perguntas_com_obs = [4, 6, 7, 11, 15]
+    opcoes_modelos = {
+        4: ["Single", "Aço", "Alumínio", "N/A"],
+        6: ["Spring", "Cuíca", "N/A"],
+        7: ["Automático", "Manual", "N/A"],
+        10: ["Conforme", "Respingo", "Falta de cordão", "Porosidade", "Falta de Fusão"]
+    }
 
     resultados = {}
-    observacoes = {}
+    complementos = {}
 
     st.caption("✅ = Conforme | ❌ = Não Conforme | 🟡 = N/A")
 
-    with st.form(key=f"form_checklist_{numero_serie}"):
-
+    with st.form(key=f"form_checklist_{numero_serie}", clear_on_submit=False):
         for i, pergunta in enumerate(perguntas, start=1):
+            cols = st.columns([7, 2, 2])
 
-            col1, col2, col3 = st.columns([4, 1, 2])
+            # Pergunta
+            cols[0].markdown(f"**{i}. {pergunta}**")
 
-            with col1:
-                st.markdown(f"**{i}. {pergunta}**")
+            # Status padrão
+            resultados[i] = cols[1].radio(
+                "",
+                ["✅", "❌", "🟡"],
+                key=f"{numero_serie}_{i}",
+                horizontal=True,
+                index=None,
+                label_visibility="collapsed"
+            )
 
-            with col2:
-                resultados[i] = st.radio(
-                    "",
-                    ["✅", "❌", "🟡"],
-                    horizontal=True,
-                    index=None,
-                    label_visibility="collapsed",
-                    key=f"resp_{numero_serie}_{i}"
+            # Complementos por pergunta
+            if i in opcoes_modelos:
+                complementos[i] = cols[2].selectbox(
+                    "Modelo",
+                    [""] + opcoes_modelos[i],
+                    key=f"modelo_{numero_serie}_{i}",
+                    label_visibility="collapsed"
                 )
 
-            with col3:
-                if i in perguntas_com_obs:
-                    observacoes[i] = st.text_input(
-                        "",
-                        placeholder="Informe modelo / tipo / grau...",
-                        key=f"obs_{numero_serie}_{i}"
-                    )
-                else:
-                    observacoes[i] = None
+            elif i in [11, 15]:  # texto livre
+                complementos[i] = cols[2].text_input(
+                    "",
+                    key=f"texto_{numero_serie}_{i}",
+                    label_visibility="collapsed"
+                )
 
-        st.divider()
-        submit = st.form_submit_button("💾 Salvar Checklist", use_container_width=True)
+            elif i in [12, 13, 14]:  # Sim / Não
+                complementos[i] = cols[2].selectbox(
+                    "",
+                    ["", "Sim", "Não"],
+                    key=f"sn_{numero_serie}_{i}",
+                    label_visibility="collapsed"
+                )
+            else:
+                complementos[i] = ""
 
-    if submit:
+        submit = st.form_submit_button("💾 Salvar Checklist")
 
-        faltando = [i for i, r in resultados.items() if r is None]
-        faltando_obs = [i for i in perguntas_com_obs if not observacoes[i]]
+        if submit:
+            if any(v is None for v in resultados.values()):
+                st.error("⚠️ Responda todos os itens")
+                return
 
-        if faltando or faltando_obs:
-            msg = ""
-            if faltando:
-                msg += f"⚠️ Responda todos os itens: {[item_keys[i] for i in faltando]}\n"
-            if faltando_obs:
-                msg += f"⚠️ Preencha observações obrigatórias: {[item_keys[i] for i in faltando_obs]}"
-            st.error(msg)
-            return
+            # 🔒 trava contra duplo envio
+            if st.session_state.get("salvando_checklist"):
+                st.warning("⏳ Salvamento em andamento, aguarde...")
+                return
 
-        dados_para_salvar = {
-            item_keys[i]: {
-                "status": status_emoji_para_texto(resultados[i]),
-                "obs": observacoes[i]
-            }
-            for i in resultados
-        }
+            st.session_state["salvando_checklist"] = True
+            registros = []
 
-        sucesso, erro = salvar_checklist_manga_pnm_detalhes(
-            numero_serie=numero_serie,
-            tipo_producao=tipo_producao,
-            respostas=dados_para_salvar,
-            usuario=usuario,
-            op=op
-        )
+            for i in resultados:
+                item_final = item_keys[i]
+                if complementos.get(i):
+                    item_final = f"{item_final} - {complementos[i]}"
 
-        if sucesso:
-            st.success("✅ Checklist salvo com sucesso")
-            st.rerun()
-        else:
-            st.error(f"❌ Erro ao salvar checklist: {erro}")
+                registros.append({
+                    "numero_serie": numero_serie,
+                    "tipo_producao": tipo_producao,
+                    "item": item_final,
+                    "status": status_emoji_para_texto(resultados[i]),
+                    "usuario": usuario,
+                    "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                })
 
+            try:
+                supabase.table("checklists_manga_pnm_detalhes") \
+                    .insert(registros) \
+                    .execute()
+
+                st.success("✅ Checklist salvo com sucesso")
+                st.session_state["salvando_checklist"] = False
+
+            except Exception as e:
+                st.session_state["salvando_checklist"] = False
+                st.error(f"❌ Erro ao salvar checklist: {e}")
+
+# ==============================
+# PÁGINA APONTAMENTO
+# ==============================
+def pagina_apontamento():
+    st.title("📦 Apontamento MANGA / PNM")
+
+    st.radio(
+        "Tipo do Produto",
+        ["MANGA", "PNM"],
+        key="tipo_producao",
+        horizontal=True
+    )
+
+    st.text_input(
+        "Leitor",
+        key="input_leitor",
+        placeholder="Aproxime o leitor...",
+        label_visibility="collapsed",
+        on_change=processar_leitura
+    )
+
+    components.html("""
+    <script>
+    function focar(){
+        const i = window.parent.document.querySelector('input[id^="input_leitor"]');
+        if(i){ i.focus(); }
+    }
+    focar();
+    new MutationObserver(focar).observe(
+        window.parent.document.body,
+        {childList:true, subtree:true}
+    );
+    </script>
+    """, height=0)
+
+    col1, col2 = st.columns(2)
+    col1.markdown(f"📦 Série: **{st.session_state.get('numero_serie','-')}**")
+    col2.markdown(f"🧾 OP: **{st.session_state.get('op','-')}**")
+
+    if st.session_state.get("erro"):
+        st.error(st.session_state["erro"])
+        st.session_state["erro"] = None
+
+    if st.session_state.get("sucesso"):
+        st.success(st.session_state["sucesso"])
+        st.session_state["sucesso"] = None
+
+    df = carregar_apontamentos()
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
 
 # ==============================
 # PÁGINA CHECKLIST
 # ==============================
-
 def pagina_checklist():
-
     st.title("🧾 Checklist de Qualidade")
 
     df_apont = carregar_apontamentos()
     hoje = datetime.datetime.now(TZ).date()
 
+    # Filtra apontamentos de hoje
     df_hoje = df_apont[df_apont["data_hora"].dt.date == hoje]
 
     if df_hoje.empty:
         st.info("Nenhum apontamento hoje")
         return
 
-    resp = supabase.table("checklists_manga_pnm_detalhes") \
+    # Buscar séries que ainda não têm checklist
+    checklists = supabase.table("checklists_manga_pnm_detalhes") \
         .select("numero_serie") \
+        .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA")) \
         .execute()
 
-    series_com_check = {
-        r["numero_serie"] for r in resp.data
-    } if resp.data else set()
+    series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
 
-    df_pendentes = df_hoje[
-        ~df_hoje["numero_serie"].isin(series_com_check)
-    ]
+    # Filtra apenas as séries sem checklist
+    df_pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_checklist)]
 
     if df_pendentes.empty:
-        st.success("✅ Todos os apontamentos de hoje já possuem checklist")
+        st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
         return
 
+    # Selectbox com séries pendentes
     numero_serie = st.selectbox(
-        "Selecione a série pendente",
-        sorted(df_pendentes["numero_serie"].unique())
+        "Selecione a série",
+        df_pendentes["numero_serie"].unique()
     )
 
     linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
 
     checklist_qualidade_manga_pnm(
-        numero_serie=numero_serie,
-        tipo_producao=linha["tipo_producao"],
-        usuario=st.session_state.get("usuario", "Operador_Logado"),
-        op=linha["op"]
+        numero_serie,
+        linha["tipo_producao"],
+        st.session_state.get("usuario", "Operador_Logado"),
+        linha["op"]
     )
-
 
 
 # ==============================
@@ -327,3 +362,4 @@ def app():
 # ==============================
 if __name__ == "__main__":
     app()
+
