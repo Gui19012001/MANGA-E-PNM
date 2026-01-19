@@ -102,6 +102,57 @@ def processar_leitura():
     st.session_state["input_leitor"] = ""
 
 # ==============================
+# PÁGINA APONTAMENTO
+# ==============================
+def pagina_apontamento():
+    st.title("📦 Apontamento MANGA / PNM")
+
+    st.radio(
+        "Tipo do Produto",
+        ["MANGA", "PNM"],
+        key="tipo_producao",
+        horizontal=True
+    )
+
+    st.text_input(
+        "Leitor",
+        key="input_leitor",
+        placeholder="Aproxime o leitor...",
+        label_visibility="collapsed",
+        on_change=processar_leitura
+    )
+
+    components.html("""
+    <script>
+    function focar(){
+        const i = window.parent.document.querySelector('input[id^="input_leitor"]');
+        if(i){ i.focus(); }
+    }
+    focar();
+    new MutationObserver(focar).observe(
+        window.parent.document.body,
+        {childList:true, subtree:true}
+    );
+    </script>
+    """, height=0)
+
+    col1, col2 = st.columns(2)
+    col1.markdown(f"📦 Série: **{st.session_state.get('numero_serie','-')}**")
+    col2.markdown(f"🧾 OP: **{st.session_state.get('op','-')}**")
+
+    if st.session_state.get("erro"):
+        st.error(st.session_state["erro"])
+        st.session_state["erro"] = None
+
+    if st.session_state.get("sucesso"):
+        st.success(st.session_state["sucesso"])
+        st.session_state["sucesso"] = None
+
+    df = carregar_apontamentos()
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+
+# ==============================
 # CHECKLIST DE QUALIDADE
 # ==============================
 def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
