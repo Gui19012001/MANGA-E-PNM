@@ -315,7 +315,7 @@ def pagina_checklist():
     # Buscar séries que ainda não têm checklist
     checklists = supabase.table("checklists_manga_pnm_detalhes") \
         .select("numero_serie") \
-        .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA", "PNM")) \
+        .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA")) \
         .execute()
 
     series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
