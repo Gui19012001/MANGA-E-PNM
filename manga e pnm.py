@@ -165,8 +165,10 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         for i, pergunta in enumerate(perguntas, start=1):
             cols = st.columns([7, 2, 2])
 
+            # Pergunta
             cols[0].markdown(f"**{i}. {pergunta}**")
 
+            # Status padrão
             resultados[i] = cols[1].radio(
                 "",
                 ["✅", "❌", "🟡"],
@@ -176,6 +178,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 label_visibility="collapsed"
             )
 
+            # Complementos por pergunta
             if i in opcoes_modelos:
                 complementos[i] = cols[2].selectbox(
                     "Modelo",
@@ -184,14 +187,14 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                     label_visibility="collapsed"
                 )
 
-            elif i in [11, 15]:
+            elif i in [11, 15]:  # texto livre
                 complementos[i] = cols[2].text_input(
                     "",
                     key=f"texto_{numero_serie}_{i}",
                     label_visibility="collapsed"
                 )
 
-            elif i in [12, 13, 14]:
+            elif i in [12, 13, 14]:  # Sim / Não
                 complementos[i] = cols[2].selectbox(
                     "",
                     ["", "Sim", "Não"],
@@ -208,6 +211,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
+            # 🔒 trava contra duplo envio
             if st.session_state.get("salvando_checklist"):
                 st.warning("⏳ Salvamento em andamento, aguarde...")
                 return
@@ -235,27 +239,11 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                     .execute()
 
                 st.success("✅ Checklist salvo com sucesso")
-
-                # 🧹 limpa estados do formulário
-                for k in list(st.session_state.keys()):
-                    if (
-                        k.startswith(f"{numero_serie}_")
-                        or k.startswith("modelo_")
-                        or k.startswith("texto_")
-                        or k.startswith("sn_")
-                    ):
-                        del st.session_state[k]
-
                 st.session_state["salvando_checklist"] = False
-
-                # 🔄 força atualização para ir ao próximo
-                st.cache_data.clear()
-                st.rerun()
 
             except Exception as e:
                 st.session_state["salvando_checklist"] = False
                 st.error(f"❌ Erro ao salvar checklist: {e}")
-
 
 # ==============================
 # PÁGINA APONTAMENTO
@@ -327,6 +315,7 @@ def pagina_checklist():
     # Buscar séries que ainda não têm checklist
     checklists = supabase.table("checklists_manga_pnm_detalhes") \
         .select("numero_serie") \
+        .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA")) \
         .execute()
 
     series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
@@ -341,8 +330,7 @@ def pagina_checklist():
     # Selectbox com séries pendentes
     numero_serie = st.selectbox(
         "Selecione a série",
-        df_pendentes["numero_serie"].unique(),
-        key="serie_selecionada"
+        df_pendentes["numero_serie"].unique()
     )
 
     linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
@@ -374,4 +362,5 @@ def app():
 # ==============================
 if __name__ == "__main__":
     app()
+
 
