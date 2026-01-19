@@ -105,7 +105,9 @@ def processar_leitura():
 # CHECKLIST DE QUALIDADE
 # ==============================
 def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
-    st.markdown(f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}")
+    st.markdown(
+        f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}"
+    )
 
     perguntas = [
         "Etiqueta do produto – As informações estão corretas / legíveis conforme modelo e gravação do eixo?",
@@ -145,43 +147,101 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         15: "GRAU DIVERGENTE"
     }
 
-    resultados, complementos = {}, {}
+    opcoes_modelos = {
+        4: ["Single", "Aço", "Alumínio", "N/A"],
+        6: ["Spring", "Cuíca", "N/A"],
+        7: ["Automático", "Manual", "N/A"],
+        10: ["Conforme", "Respingo", "Falta de cordão", "Porosidade", "Falta de Fusão"]
+    }
+
+    resultados = {}
+    complementos = {}
+
+    st.caption("✅ = Conforme | ❌ = Não Conforme | 🟡 = N/A")
 
     with st.form(key=f"form_checklist_{numero_serie}", clear_on_submit=False):
         for i, pergunta in enumerate(perguntas, start=1):
             cols = st.columns([7, 2, 2])
+
+            # Pergunta
             cols[0].markdown(f"**{i}. {pergunta}**")
-            resultados[i] = cols[1].radio("", ["✅", "❌", "🟡"], key=f"{numero_serie}_{i}", horizontal=True, index=None, label_visibility="collapsed")
-            complementos[i] = cols[2].text_input("", key=f"comp_{numero_serie}_{i}", label_visibility="collapsed")
+
+            # Status padrão
+            resultados[i] = cols[1].radio(
+                "",
+                ["✅", "❌", "🟡"],
+                key=f"{numero_serie}_{i}",
+                horizontal=True,
+                index=None,
+                label_visibility="collapsed"
+            )
+
+            # Complementos por pergunta
+            if i in opcoes_modelos:
+                complementos[i] = cols[2].selectbox(
+                    "Modelo",
+                    [""] + opcoes_modelos[i],
+                    key=f"modelo_{numero_serie}_{i}",
+                    label_visibility="collapsed"
+                )
+
+            elif i in [11, 15]:  # texto livre
+                complementos[i] = cols[2].text_input(
+                    "",
+                    key=f"texto_{numero_serie}_{i}",
+                    label_visibility="collapsed"
+                )
+
+            elif i in [12, 13, 14]:  # Sim / Não
+                complementos[i] = cols[2].selectbox(
+                    "",
+                    ["", "Sim", "Não"],
+                    key=f"sn_{numero_serie}_{i}",
+                    label_visibility="collapsed"
+                )
+            else:
+                complementos[i] = ""
 
         submit = st.form_submit_button("💾 Salvar Checklist")
 
-    if submit:
-        if any(v is None for v in resultados.values()):
-            st.error("⚠️ Responda todos os itens")
-            return
+        if submit:
+            if any(v is None for v in resultados.values()):
+                st.error("⚠️ Responda todos os itens")
+                return
 
-        registros = []
-        for i in resultados:
-            item = item_keys[i]
-            if complementos[i]:
-                item = f"{item} - {complementos[i]}"
+            # 🔒 trava contra duplo envio
+            if st.session_state.get("salvando_checklist"):
+                st.warning("⏳ Salvamento em andamento, aguarde...")
+                return
 
-            registros.append({
-                "numero_serie": numero_serie,
-                "tipo_producao": tipo_producao,
-                "item": item,
-                "status": status_emoji_para_texto(resultados[i]),
-                "usuario": usuario,
-                "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
-            })
+            st.session_state["salvando_checklist"] = True
+            registros = []
 
-        supabase.table("checklists_manga_pnm_detalhes").insert(registros).execute()
+            for i in resultados:
+                item_final = item_keys[i]
+                if complementos.get(i):
+                    item_final = f"{item_final} - {complementos[i]}"
 
-        st.cache_data.clear()
-        st.success("✅ Checklist salvo com sucesso")
-        st.rerun()
+                registros.append({
+                    "numero_serie": numero_serie,
+                    "tipo_producao": tipo_producao,
+                    "item": item_final,
+                    "status": status_emoji_para_texto(resultados[i]),
+                    "usuario": usuario,
+                    "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                })
 
+            try:
+                supabase.table("checklists_manga_pnm_detalhes") \
+                    .insert(registros) \
+                    .execute()
+
+                st.success("✅ Checklist salvo com sucesso")
+                st.session_state["salvando_checklist"] = False
+
+            except Exception as e:
+                st.session_state["salvando_checklist"] = False
+                st.error(f"❌ Erro ao salvar checklist: {e}")
 # ==============================
 # PÁGINA CHECKLIST
 # ==============================
