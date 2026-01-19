@@ -302,41 +302,40 @@ def pagina_apontamento():
 def pagina_checklist():
     st.title("🧾 Checklist de Qualidade")
 
-    df_apont = carregar_apontamentos()
+    df = carregar_apontamentos()
     hoje = datetime.datetime.now(TZ).date()
-
-    df_hoje = df_apont[df_apont["data_hora"].dt.date == hoje]
+    df_hoje = df[df["data_hora"].dt.date == hoje]
 
     if df_hoje.empty:
         st.info("Nenhum apontamento hoje")
         return
 
-    checklists = supabase.table("checklists_manga_pnm") \
-        .select("numero_serie") \
-        .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA")) \
-        .execute()
+    try:
+        res = supabase.table("checklists_manga_pnm") \
+            .select("numero_serie") \
+            .execute()
 
-    series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
+        series_com_checklist = {r["numero_serie"] for r in res.data} if res.data else set()
 
-    df_pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_checklist)]
+    except Exception:
+        series_com_checklist = set()
 
-    if df_pendentes.empty:
-        st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
+    pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_checklist)]
+
+    if pendentes.empty:
+        st.success("✅ Todos os itens já possuem checklist")
         return
 
-    numero_serie = st.selectbox(
-        "Selecione a série",
-        df_pendentes["numero_serie"].unique()
-    )
-
-    linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
+    serie = st.selectbox("Selecione a série", pendentes["numero_serie"].unique())
+    linha = pendentes[pendentes["numero_serie"] == serie].iloc[0]
 
     checklist_qualidade_manga_pnm(
-        numero_serie,
+        serie,
         linha["tipo_producao"],
         st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
+
 
 
 
