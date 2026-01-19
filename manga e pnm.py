@@ -341,7 +341,8 @@ def pagina_checklist():
     # Selectbox com séries pendentes
     numero_serie = st.selectbox(
         "Selecione a série",
-        df_pendentes["numero_serie"].unique()
+        df_pendentes["numero_serie"].unique(),
+        key="serie_selecionada"
     )
 
     linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
