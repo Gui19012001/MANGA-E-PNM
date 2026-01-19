@@ -305,29 +305,25 @@ def pagina_checklist():
     df_apont = carregar_apontamentos()
     hoje = datetime.datetime.now(TZ).date()
 
-    # Filtra apontamentos de hoje
     df_hoje = df_apont[df_apont["data_hora"].dt.date == hoje]
 
     if df_hoje.empty:
         st.info("Nenhum apontamento hoje")
         return
 
-    # Buscar séries que ainda não têm checklist
-    checklists = supabase.table("checklists_manga_pnm_detalhes") \
+    checklists = supabase.table("checklists_manga_pnm") \
         .select("numero_serie") \
         .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA")) \
         .execute()
 
     series_com_checklist = {r["numero_serie"] for r in checklists.data} if checklists.data else set()
 
-    # Filtra apenas as séries sem checklist
     df_pendentes = df_hoje[~df_hoje["numero_serie"].isin(series_com_checklist)]
 
     if df_pendentes.empty:
         st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
         return
 
-    # Selectbox com séries pendentes
     numero_serie = st.selectbox(
         "Selecione a série",
         df_pendentes["numero_serie"].unique()
@@ -341,6 +337,7 @@ def pagina_checklist():
         st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
+
 
 
 # ==============================
