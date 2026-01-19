@@ -248,6 +248,7 @@ def pagina_checklist():
         st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
         return
 
+    # 🔄 reset do selectbox após salvamento
     if st.session_state.get("checklist_salvo"):
         st.session_state["serie_selecionada"] = None
         st.session_state["checklist_salvo"] = False
@@ -258,7 +259,13 @@ def pagina_checklist():
         key="serie_selecionada"
     )
 
-    linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
+    # 🛡️ proteção contra rerun / valor inválido
+    linha_df = df_pendentes[df_pendentes["numero_serie"] == numero_serie]
+
+    if linha_df.empty:
+        return
+
+    linha = linha_df.iloc[0]
 
     checklist_qualidade_manga_pnm(
         numero_serie,
@@ -266,6 +273,7 @@ def pagina_checklist():
         st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
+
 
 # ==============================
 # APP
