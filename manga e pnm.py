@@ -248,78 +248,38 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
 # ==============================
 # PÁGINA APONTAMENTO
 # ==============================
-def pagina_apontamento():
-    st.title("📦 Apontamento MANGA / PNM")
-
-    st.radio(
-        "Tipo do Produto",
-        ["MANGA", "PNM"],
-        key="tipo_producao",
-        horizontal=True
-    )
-
-    st.text_input(
-        "Leitor",
-        key="input_leitor",
-        placeholder="Aproxime o leitor...",
-        label_visibility="collapsed",
-        on_change=processar_leitura
-    )
-
-    components.html("""
-    <script>
-    function focar(){
-        const i = window.parent.document.querySelector('input[id^="input_leitor"]');
-        if(i){ i.focus(); }
-    }
-    focar();
-    new MutationObserver(focar).observe(
-        window.parent.document.body,
-        {childList:true, subtree:true}
-    );
-    </script>
-    """, height=0)
-
-    col1, col2 = st.columns(2)
-    col1.markdown(f"📦 Série: **{st.session_state.get('numero_serie','-')}**")
-    col2.markdown(f"🧾 OP: **{st.session_state.get('op','-')}**")
-
-    if st.session_state.get("erro"):
-        st.error(st.session_state["erro"])
-        st.session_state["erro"] = None
-
-    if st.session_state.get("sucesso"):
-        st.success(st.session_state["sucesso"])
-        st.session_state["sucesso"] = None
-
-    df = carregar_apontamentos()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
-
 def pagina_checklist():
     st.title("🧾 Checklist de Qualidade")
 
+    # 🔹 Apontamentos
     df_apont = carregar_apontamentos()
     hoje = datetime.datetime.now(TZ).date()
 
-    # Apontamentos de hoje
     df_hoje = df_apont[df_apont["data_hora"].dt.date == hoje]
 
     if df_hoje.empty:
         st.info("Nenhum apontamento hoje")
         return
 
-    # 🔹 BUSCA CORRETA: séries que JÁ TÊM checklist (tabela CABEÇALHO)
-    resp = supabase.table("checklists_manga_pnm") \
-        .select("numero_serie") \
-        .eq("tipo_producao", st.session_state.get("tipo_producao", "MANGA")) \
-        .execute()
+    # 🔹 Buscar séries que JÁ POSSUEM checklist
+    try:
+        resp = supabase.table("checklists_manga_pnm_detalhes") \
+            .select("numero_serie") \
+            .execute()
+    except Exception as e:
+        st.error("❌ Erro ao consultar checklists no Supabase")
+        st.exception(e)
+        return
 
-    series_com_checklist = {
-        r["numero_serie"] for r in resp.data
-    } if resp.data else set()
+    # 🔹 DISTINCT manual (tabela tem várias linhas por série)
+    series_com_checklist = set()
 
-    # 🔹 Filtra SOMENTE pendentes
+    if resp.data:
+        series_com_checklist = {
+            r["numero_serie"] for r in resp.data if r.get("numero_serie")
+        }
+
+    # 🔹 Remove do apontamento as séries já finalizadas
     df_pendentes = df_hoje[
         ~df_hoje["numero_serie"].isin(series_com_checklist)
     ]
@@ -328,14 +288,13 @@ def pagina_checklist():
         st.success("✅ Todos os apontamentos de hoje já possuem checklist")
         return
 
+    # 🔹 Seleção da série
     numero_serie = st.selectbox(
-        "Selecione a série",
+        "Selecione a série pendente",
         sorted(df_pendentes["numero_serie"].unique())
     )
 
-    linha = df_pendentes[
-        df_pendentes["numero_serie"] == numero_serie
-    ].iloc[0]
+    linha = df_pendentes[df_pendentes["numero_serie"] == numero_serie].iloc[0]
 
     checklist_qualidade_manga_pnm(
         numero_serie=numero_serie,
@@ -343,6 +302,7 @@ def pagina_checklist():
         usuario=st.session_state.get("usuario", "Operador_Logado"),
         op=linha["op"]
     )
+
 
 
 # ==============================
