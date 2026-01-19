@@ -29,71 +29,18 @@ def status_emoji_para_texto(emoji):
     return {"✅": "Conforme", "❌": "Não Conforme", "🟡": "N/A"}.get(emoji)
 
 # ==============================
-# SUPABASE – APONTAMENTO
+# APONTAMENTOS
 # ==============================
-def salvar_apontamento(numero_serie, op, tipo_producao, usuario):
-    check = supabase.table("apontamentos_manga_pnm") \
-        .select("id") \
-        .eq("numero_serie", numero_serie) \
-        .execute()
-
-    if check.data:
-        return False, f"Série {numero_serie} já apontada."
-
-    supabase.table("apontamentos_manga_pnm").insert({
-        "numero_serie": numero_serie,
-        "op": op,
-        "tipo_producao": tipo_producao,
-        "usuario": usuario,
-        "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
-    }).execute()
-
-    st.cache_data.clear()
-    return True, None
-
-
 def carregar_apontamentos():
     data = supabase.table("apontamentos_manga_pnm") \
         .select("*") \
         .order("data_hora", desc=True) \
-        .limit(50) \
         .execute()
 
     df = pd.DataFrame(data.data)
     if not df.empty:
         df["data_hora"] = pd.to_datetime(df["data_hora"], utc=True).dt.tz_convert(TZ)
     return df
-
-# ==============================
-# CALLBACK LEITOR
-# ==============================
-def processar_leitura():
-    leitura = st.session_state.get("input_leitor", "").strip()
-    if not leitura:
-        return
-
-    if len(leitura) == 9:
-        st.session_state["numero_serie"] = leitura
-        st.session_state["erro"] = None
-
-    elif len(leitura) == 11:
-        if not st.session_state.get("numero_serie"):
-            st.session_state["erro"] = "⚠️ Leia primeiro o número de série"
-        else:
-            sucesso, erro = salvar_apontamento(
-                st.session_state["numero_serie"],
-                leitura,
-                st.session_state.get("tipo_producao"),
-                st.session_state.get("usuario", "Operador_Logado")
-            )
-
-            if sucesso:
-                st.session_state["sucesso"] = "✅ Apontamento realizado"
-                st.session_state["numero_serie"] = ""
-            else:
-                st.session_state["erro"] = erro
-
-    st.session_state["input_leitor"] = ""
 
 # ==============================
 # CHECKLIST
@@ -121,10 +68,11 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
 
     resultados = {}
 
-    with st.form(f"form_{numero_serie}"):
-        for i, p in enumerate(perguntas):
+    with st.form(f"form_{numero_serie}", clear_on_submit=False):
+        for i, pergunta in enumerate(perguntas):
             resultados[i] = st.radio(
-                p, ["✅", "❌", "🟡"],
+                pergunta,
+                ["✅", "❌", "🟡"],
                 horizontal=True,
                 key=f"{numero_serie}_{i}"
             )
@@ -145,8 +93,10 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 .insert(registros) \
                 .execute()
 
-            # 🔑 CONTROLE CORRETO DE ESTADO
-            st.session_state["serie_checklist"] = None
+            # ✅ RESET CORRETO DO SELECTBOX
+            if "serie_checklist" in st.session_state:
+                del st.session_state["serie_checklist"]
+
             st.success("✅ Checklist salvo com sucesso")
             st.rerun()
 
@@ -185,14 +135,14 @@ def pagina_checklist():
         key="serie_checklist"
     )
 
-    df_linha = pendentes[pendentes["numero_serie"] == numero_serie]
-
-    if df_linha.empty:
-        st.session_state["serie_checklist"] = None
+    linha_df = pendentes[pendentes["numero_serie"] == numero_serie]
+    if linha_df.empty:
+        if "serie_checklist" in st.session_state:
+            del st.session_state["serie_checklist"]
         st.rerun()
         return
 
-    linha = df_linha.iloc[0]
+    linha = linha_df.iloc[0]
 
     checklist_qualidade_manga_pnm(
         numero_serie,
@@ -200,42 +150,6 @@ def pagina_checklist():
         st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
-
-# ==============================
-# APONTAMENTO
-# ==============================
-def pagina_apontamento():
-    st.title("📦 Apontamento MANGA / PNM")
-
-    st.radio("Tipo do Produto", ["MANGA", "PNM"], key="tipo_producao", horizontal=True)
-
-    st.text_input(
-        "Leitor",
-        key="input_leitor",
-        on_change=processar_leitura,
-        label_visibility="collapsed"
-    )
-
-    components.html("""
-    <script>
-    const i = window.parent.document.querySelector('input[id^="input_leitor"]');
-    if(i){ i.focus(); }
-    </script>
-    """, height=0)
-
-    st.markdown(f"📦 Série: **{st.session_state.get('numero_serie','-')}**")
-
-    if st.session_state.get("erro"):
-        st.error(st.session_state["erro"])
-        st.session_state["erro"] = None
-
-    if st.session_state.get("sucesso"):
-        st.success(st.session_state["sucesso"])
-        st.session_state["sucesso"] = None
-
-    df = carregar_apontamentos()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
 
 # ==============================
 # APP
@@ -246,9 +160,7 @@ def app():
 
     menu = st.sidebar.radio("Menu", ["Apontamento", "Checklist"])
 
-    if menu == "Apontamento":
-        pagina_apontamento()
-    else:
+    if menu == "Checklist":
         pagina_checklist()
 
 if __name__ == "__main__":
