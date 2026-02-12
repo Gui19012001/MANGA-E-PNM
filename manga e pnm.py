@@ -19,11 +19,15 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TZ = pytz.timezone("America/Sao_Paulo")
-
 st.set_page_config(page_title="Apontamento MANGA / PNM", layout="wide")
 
 # Bucket do Storage (crie no Supabase)
 BUCKET_FOTOS = "checklist_fotos"
+
+# Se bucket for PRIVATE, deixe True para gerar link temporário
+# (se for PUBLIC, pode deixar False)
+USAR_SIGNED_URL = True
+SIGNED_URL_EXPIRA_SEG = 60 * 60  # 1h
 
 # ==============================
 # UTIL
@@ -51,38 +55,69 @@ def listar_fotos_da_serie(numero_serie: str, tipo_producao: str | None = None):
     q = supabase.table("checklists_manga_pnm_fotos").select("*").eq("numero_serie", numero_serie)
     if tipo_producao:
         q = q.eq("tipo_producao", tipo_producao)
-    data = q.order("data_hora", desc=True).limit(20).execute()
+    data = q.order("data_hora", desc=True).limit(50).execute()
     df = pd.DataFrame(data.data)
     if not df.empty and "data_hora" in df.columns:
         df["data_hora"] = pd.to_datetime(df["data_hora"], utc=True).dt.tz_convert(TZ)
     return df
 
+def listar_arquivos_no_storage(prefixo: str):
+    """
+    Lista arquivos no bucket pelo prefixo. Ex: 'MANGA/123456789/'
+    """
+    try:
+        res = supabase.storage.from_(BUCKET_FOTOS).list(path=prefixo)
+        # res costuma ser lista de dicts com name, id, etc.
+        return res or []
+    except Exception as e:
+        st.error(f"❌ Erro ao listar Storage (prefixo={prefixo}): {e}")
+        return []
+
+def gerar_url(storage_path: str):
+    """
+    Se bucket for public -> public_url
+    Se bucket for private -> signed_url
+    """
+    try:
+        if USAR_SIGNED_URL:
+            signed = supabase.storage.from_(BUCKET_FOTOS).create_signed_url(storage_path, SIGNED_URL_EXPIRA_SEG)
+            # signed pode vir como dict {"signedURL": "..."} dependendo lib
+            if isinstance(signed, dict):
+                return signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
+            return signed
+        else:
+            return supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
+    except Exception as e:
+        st.error(f"❌ Erro ao gerar URL para {storage_path}: {e}")
+        return None
+
 def upload_foto_para_supabase_storage(numero_serie: str, tipo_producao: str, op: str, usuario: str, arquivo, origem: str):
     """
     arquivo: UploadedFile do Streamlit (file_uploader)
-    Retorna: (url_publica, storage_path, nome_arquivo)
+    Retorna: (url, storage_path, nome_arquivo)
     """
     if arquivo is None:
         return None, None, None
 
+    file_bytes = arquivo.getvalue()
+    if not file_bytes:
+        st.error("❌ Arquivo veio vazio (0 bytes).")
+        return None, None, None
+
+    ext = _ext_from_mime(getattr(arquivo, "type", "image/jpeg"))
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    safe_tipo = _sanitize(tipo_producao or "NA")
+    safe_usuario = _sanitize(usuario or "NA")
+    safe_op = _sanitize(op or "NA")
+    safe_serie = _sanitize(numero_serie or "NA")
+
+    nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_usuario}__{ts}.{ext}"
+    storage_path = f"{safe_tipo}/{safe_serie}/{nome_arquivo}"
+
+    # ✅ Upload com checagem de resposta
     try:
-        file_bytes = arquivo.getvalue()
-        if not file_bytes:
-            return None, None, None
-
-        ext = _ext_from_mime(getattr(arquivo, "type", "image/jpeg"))
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
-        safe_tipo = _sanitize(tipo_producao or "NA")
-        safe_usuario = _sanitize(usuario or "NA")
-        safe_op = _sanitize(op or "NA")
-        safe_serie = _sanitize(numero_serie or "NA")
-
-        # ✅ nome do arquivo começa com a série
-        nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_usuario}__{ts}.{ext}"
-        storage_path = f"{safe_tipo}/{safe_serie}/{nome_arquivo}"
-
-        supabase.storage.from_(BUCKET_FOTOS).upload(
+        upload_resp = supabase.storage.from_(BUCKET_FOTOS).upload(
             storage_path,
             file_bytes,
             file_options={
@@ -90,34 +125,41 @@ def upload_foto_para_supabase_storage(numero_serie: str, tipo_producao: str, op:
                 "upsert": "true"
             }
         )
-
-        url_publica = supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
-
-        payload = {
-            "numero_serie": numero_serie,
-            "tipo_producao": tipo_producao,
-            "op": op,
-            "usuario": usuario,
-            "url": url_publica,
-            "origem": origem,  # "upload"
-            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "storage_path": storage_path,
-            "nome_arquivo": nome_arquivo,
-        }
-
-        # fallback se sua tabela não tiver colunas extras
-        try:
-            supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
-        except Exception:
-            payload.pop("storage_path", None)
-            payload.pop("nome_arquivo", None)
-            supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
-
-        return url_publica, storage_path, nome_arquivo
-
     except Exception as e:
-        st.error(f"❌ Erro ao enviar foto: {e}")
+        st.error(f"❌ Upload falhou (permite escrever no bucket?)\n\n{e}")
         return None, None, None
+
+    # Algumas libs retornam dict com erro/status
+    if isinstance(upload_resp, dict) and upload_resp.get("error"):
+        st.error(f"❌ Supabase retornou erro no upload: {upload_resp.get('error')}")
+        return None, None, None
+
+    url = gerar_url(storage_path)
+    if not url:
+        st.warning("⚠️ Upload ok, mas não consegui gerar URL (bucket private sem signed_url ou erro).")
+
+    # ✅ grava no banco
+    payload = {
+        "numero_serie": numero_serie,
+        "tipo_producao": tipo_producao,
+        "op": op,
+        "usuario": usuario,
+        "url": url or "",
+        "origem": origem,  # "upload"
+        "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "storage_path": storage_path,
+        "nome_arquivo": nome_arquivo,
+    }
+
+    try:
+        supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
+    except Exception:
+        # fallback se sua tabela não tiver colunas extras
+        payload.pop("storage_path", None)
+        payload.pop("nome_arquivo", None)
+        supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
+
+    return url, storage_path, nome_arquivo
 
 # ==============================
 # FUNÇÕES SUPABASE – APONTAMENTO
@@ -339,8 +381,9 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         st.markdown("### 📷 Foto (somente pelo tablet via upload)")
 
         st.caption(
-            "✅ Aqui NÃO tem câmera automática do Streamlit. "
-            "No tablet, ao clicar em anexar, você escolhe usar a **câmera traseira** do aparelho."
+            "⚠️ Onde ver no Supabase:\n"
+            "- As IMAGENS ficam em **Storage → Buckets → checklist_fotos**\n"
+            "- A TABELA (checklists_manga_pnm_fotos) guarda **url / storage_path / número de série**"
         )
 
         fotos_upload = st.file_uploader(
@@ -357,6 +400,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
+            # salva checklist
             registros = []
             for i in resultados:
                 item_final = item_keys[i]
@@ -371,13 +415,14 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                     "usuario": usuario,
                     "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
                 })
-
             supabase.table("checklists_manga_pnm_detalhes").insert(registros).execute()
 
             urls = []
+            paths = []
+
             if fotos_upload:
                 for arq in fotos_upload:
-                    url, _, _ = upload_foto_para_supabase_storage(
+                    url, storage_path, _ = upload_foto_para_supabase_storage(
                         numero_serie=numero_serie,
                         tipo_producao=tipo_producao,
                         op=op,
@@ -385,29 +430,46 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                         arquivo=arq,
                         origem="upload"
                     )
+                    if storage_path:
+                        paths.append(storage_path)
                     if url:
                         urls.append(url)
 
-            if urls:
-                st.success(f"✅ Checklist salvo + {len(urls)} foto(s) enviada(s)")
+            # ✅ debug visível
+            if paths:
+                st.success(f"✅ {len(paths)} arquivo(s) enviado(s) para o Storage.")
+                st.code("\n".join(paths))
             else:
-                st.warning("✅ Checklist salvo, mas sem fotos anexadas")
+                st.warning("⚠️ Nenhum arquivo foi enviado para o Storage. Se você não viu erro, é permissão/policy do bucket.")
+
+            if urls:
+                st.success(f"✅ Checklist salvo + {len(urls)} foto(s) com link gerado")
+            else:
+                st.warning("✅ Checklist salvo, mas sem link (normal se bucket PRIVATE sem signed-url / ou sem foto)")
 
             st.session_state["checklist_salvo"] = True
             st.rerun()
 
+    # ✅ mostra o que está salvo na tabela e no storage
     st.divider()
-    st.markdown(f"### 🖼️ Fotos já salvas — Série **{numero_serie}**")
+    st.markdown(f"### 🔎 Debug — Série **{numero_serie}**")
+
+    st.markdown("**Tabela `checklists_manga_pnm_fotos` (últimas 50):**")
     df_fotos = listar_fotos_da_serie(numero_serie, tipo_producao=tipo_producao)
     if df_fotos.empty:
-        st.caption("Nenhuma foto salva ainda para esta série.")
+        st.caption("Nenhum registro na tabela ainda.")
     else:
-        cols_show = [c for c in ["data_hora", "numero_serie", "tipo_producao", "op", "usuario", "origem", "nome_arquivo", "url"] if c in df_fotos.columns]
+        cols_show = [c for c in ["data_hora", "numero_serie", "tipo_producao", "op", "usuario", "origem", "nome_arquivo", "storage_path", "url"] if c in df_fotos.columns]
         st.dataframe(df_fotos[cols_show], use_container_width=True)
 
-        for _, r in df_fotos.head(6).iterrows():
-            st.markdown(f"**Série:** {r.get('numero_serie','-')} | **OP:** {r.get('op','-')} | **Usuário:** {r.get('usuario','-')}")
-            st.image(r.get("url"), use_container_width=True)
+    st.markdown("**Storage (prefixo do bucket):**")
+    prefixo = f"{_sanitize(tipo_producao)}/{_sanitize(numero_serie)}/"
+    arquivos = listar_arquivos_no_storage(prefixo)
+    if not arquivos:
+        st.caption(f"Nenhum arquivo encontrado no Storage com prefixo: {prefixo}")
+    else:
+        st.success(f"✅ Achei {len(arquivos)} arquivo(s) no Storage com prefixo: {prefixo}")
+        st.write([a.get("name") for a in arquivos if isinstance(a, dict)])
 
 # ==============================
 # PÁGINA CHECKLIST
@@ -481,4 +543,5 @@ def app():
 
 if __name__ == "__main__":
     app()
+
 
