@@ -22,11 +22,79 @@ TZ = pytz.timezone("America/Sao_Paulo")
 
 st.set_page_config(page_title="Apontamento MANGA / PNM", layout="wide")
 
+# Bucket do Storage (crie no Supabase)
+BUCKET_FOTOS = "checklist_fotos"
+
 # ==============================
 # UTIL
 # ==============================
 def status_emoji_para_texto(emoji):
     return {"✅": "Conforme", "❌": "Não Conforme", "🟡": "N/A"}.get(emoji)
+
+def _ext_from_mime(mime: str) -> str:
+    mime = (mime or "").lower().strip()
+    if mime in ("image/jpeg", "image/jpg"):
+        return "jpg"
+    if mime == "image/png":
+        return "png"
+    if mime == "image/webp":
+        return "webp"
+    return "jpg"
+
+def upload_foto_para_supabase_storage(numero_serie: str, tipo_producao: str, op: str, usuario: str, arquivo, origem: str):
+    """
+    arquivo: UploadedFile do Streamlit (camera_input ou file_uploader)
+    Retorna: url_publica (str)
+    """
+    if arquivo is None:
+        return None
+
+    try:
+        # bytes do arquivo
+        file_bytes = arquivo.getvalue()
+        if not file_bytes:
+            return None
+
+        ext = _ext_from_mime(getattr(arquivo, "type", "image/jpeg"))
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+        # caminho no bucket (organizado)
+        safe_tipo = (tipo_producao or "NA").replace(" ", "_")
+        safe_usuario = (usuario or "NA").replace(" ", "_")
+        safe_op = (op or "NA").replace(" ", "_")
+
+        storage_path = f"{safe_tipo}/{numero_serie}/{safe_op}_{safe_usuario}_{ts}.{ext}"
+
+        # upload
+        supabase.storage.from_(BUCKET_FOTOS).upload(
+            storage_path,
+            file_bytes,
+            file_options={
+                "content-type": getattr(arquivo, "type", "image/jpeg"),
+                "upsert": "true"
+            }
+        )
+
+        # URL pública (funciona se o bucket for PUBLIC)
+        url_publica = supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
+
+        # salva no banco (tabela de fotos)
+        supabase.table("checklists_manga_pnm_fotos").insert({
+            "numero_serie": numero_serie,
+            "tipo_producao": tipo_producao,
+            "op": op,
+            "usuario": usuario,
+            "url": url_publica,
+            "origem": origem,
+            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }).execute()
+
+        return url_publica
+
+    except Exception as e:
+        # Não derruba o checklist inteiro por causa da foto
+        st.error(f"❌ Erro ao enviar foto: {e}")
+        return None
 
 # ==============================
 # FUNÇÕES SUPABASE – APONTAMENTO
@@ -247,6 +315,21 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
             else:
                 complementos[i] = ""
 
+        st.divider()
+        st.markdown("### 📷 Fotos (opcional)")
+        st.caption("Use a câmera (se disponível) ou anexe imagens do PC/celular. As fotos vão para o Supabase Storage.")
+
+        # 1) câmera (uma foto)
+        foto_camera = st.camera_input("Tirar foto agora", key=f"foto_camera_{numero_serie}")
+
+        # 2) upload múltiplo (para PC também)
+        fotos_upload = st.file_uploader(
+            "Anexar fotos (JPG/PNG/WebP)",
+            type=["jpg", "jpeg", "png", "webp"],
+            accept_multiple_files=True,
+            key=f"fotos_upload_{numero_serie}"
+        )
+
         submit = st.form_submit_button("💾 Salvar Checklist")
 
         if submit:
@@ -254,6 +337,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
+            # salva itens do checklist (igual você já fazia)
             registros = []
             for i in resultados:
                 item_final = item_keys[i]
@@ -270,6 +354,39 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 })
 
             supabase.table("checklists_manga_pnm_detalhes").insert(registros).execute()
+
+            # envia fotos (se tiver)
+            urls = []
+
+            if foto_camera is not None:
+                url = upload_foto_para_supabase_storage(
+                    numero_serie=numero_serie,
+                    tipo_producao=tipo_producao,
+                    op=op,
+                    usuario=usuario,
+                    arquivo=foto_camera,
+                    origem="camera"
+                )
+                if url:
+                    urls.append(url)
+
+            if fotos_upload:
+                for arq in fotos_upload:
+                    url = upload_foto_para_supabase_storage(
+                        numero_serie=numero_serie,
+                        tipo_producao=tipo_producao,
+                        op=op,
+                        usuario=usuario,
+                        arquivo=arq,
+                        origem="upload"
+                    )
+                    if url:
+                        urls.append(url)
+
+            if urls:
+                st.success(f"✅ Checklist salvo + {len(urls)} foto(s) enviada(s) para o Supabase")
+            else:
+                st.success("✅ Checklist salvo (sem fotos)")
 
             st.session_state["checklist_salvo"] = True
             st.rerun()
@@ -290,7 +407,6 @@ def pagina_checklist():
 
     hoje_str = hoje.strftime("%Y-%m-%d")
 
-    # 🔥 BUSCA CHECKLISTS DE HOJE (COM TIPO)
     checklists = supabase.table("checklists_manga_pnm_detalhes") \
         .select("numero_serie, tipo_producao") \
         .gte("data_hora", f"{hoje_str}T00:00:00") \
@@ -299,8 +415,6 @@ def pagina_checklist():
 
     if checklists.data:
         df_check = pd.DataFrame(checklists.data)
-
-        # 🔥 REMOVE APENAS SE (SERIE + TIPO) JÁ EXISTIR
         df_pendentes = df_hoje.merge(
             df_check,
             on=["numero_serie", "tipo_producao"],
@@ -330,12 +444,10 @@ def pagina_checklist():
 
     checklist_qualidade_manga_pnm(
         numero_serie,
-        linha["tipo_producao"],  # 🔥 AGORA É DECISIVO
+        linha["tipo_producao"],
         st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
-
-
 
 # ==============================
 # APP
