@@ -26,7 +26,7 @@ BUCKET_FOTOS = "checklist_fotos"
 
 # Se bucket for PRIVATE, deixe True para gerar link temporário
 # (se for PUBLIC, pode deixar False)
-USAR_SIGNED_URL = false
+USAR_SIGNED_URL = False
 SIGNED_URL_EXPIRA_SEG = 60 * 60  # 1h
 
 # ==============================
