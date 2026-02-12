@@ -45,11 +45,27 @@ def _ext_from_mime(mime: str) -> str:
         return "webp"
     return "jpg"
 
-def _sanitize(s: str) -> str:
-    s = (s or "").strip()
+import math
+
+def _sanitize(s) -> str:
+    """
+    Aceita None, NaN, int/float, etc. e sempre retorna string segura.
+    """
+    # trata None e NaN
+    if s is None:
+        s = ""
+    elif isinstance(s, float) and math.isnan(s):
+        s = ""
+
+    # garante string
+    s = str(s).strip()
+
+    # limpa caracteres inválidos pra caminho
     for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
         s = s.replace(ch, "_")
+
     return s.replace(" ", "_")
+
 
 def listar_fotos_da_serie(numero_serie: str, tipo_producao: str | None = None):
     q = supabase.table("checklists_manga_pnm_fotos").select("*").eq("numero_serie", numero_serie)
