@@ -3,6 +3,7 @@ import pandas as pd
 import datetime
 import pytz
 import os
+import math
 from supabase import create_client
 from dotenv import load_dotenv
 from pathlib import Path
@@ -16,6 +17,10 @@ load_dotenv(env_path)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("SUPABASE_URL / SUPABASE_KEY não encontrados no teste.env")
+
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TZ = pytz.timezone("America/Sao_Paulo")
@@ -24,10 +29,9 @@ st.set_page_config(page_title="Apontamento MANGA / PNM", layout="wide")
 # Bucket do Storage (crie no Supabase)
 BUCKET_FOTOS = "checklist_fotos"
 
-# Se bucket for PRIVATE, deixe True para gerar link temporário
-# (se for PUBLIC, pode deixar False)
+# Bucket PUBLIC (como no seu print)
 USAR_SIGNED_URL = False
-SIGNED_URL_EXPIRA_SEG = 60 * 60  # 1h
+SIGNED_URL_EXPIRA_SEG = 60 * 60  # não usado se PUBLIC
 
 # ==============================
 # UTIL
@@ -45,29 +49,34 @@ def _ext_from_mime(mime: str) -> str:
         return "webp"
     return "jpg"
 
-import math
-
 def _sanitize(s) -> str:
     """
     Aceita None, NaN, int/float, etc. e sempre retorna string segura.
     """
-    # trata None e NaN
     if s is None:
         s = ""
     elif isinstance(s, float) and math.isnan(s):
         s = ""
-
-    # garante string
     s = str(s).strip()
-
-    # limpa caracteres inválidos pra caminho
     for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
         s = s.replace(ch, "_")
-
     return s.replace(" ", "_")
 
+def _normaliza_codigo(v) -> str:
+    """
+    Evita 123456789.0 vindo do pandas e garante string.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, float) and math.isnan(v):
+        return ""
+    s = str(v).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s
 
 def listar_fotos_da_serie(numero_serie: str, tipo_producao: str | None = None):
+    numero_serie = _normaliza_codigo(numero_serie)
     q = supabase.table("checklists_manga_pnm_fotos").select("*").eq("numero_serie", numero_serie)
     if tipo_producao:
         q = q.eq("tipo_producao", tipo_producao)
@@ -83,7 +92,6 @@ def listar_arquivos_no_storage(prefixo: str):
     """
     try:
         res = supabase.storage.from_(BUCKET_FOTOS).list(path=prefixo)
-        # res costuma ser lista de dicts com name, id, etc.
         return res or []
     except Exception as e:
         st.error(f"❌ Erro ao listar Storage (prefixo={prefixo}): {e}")
@@ -95,14 +103,11 @@ def gerar_url(storage_path: str):
     """
     try:
         return supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
-
     except Exception as e:
         st.error(f"❌ Erro ao gerar URL para {storage_path}: {e}")
         return None
 
-
 def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, arquivo, origem):
-
     if arquivo is None:
         return None, None, None
 
@@ -111,15 +116,20 @@ def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, 
         st.error("❌ Arquivo vazio")
         return None, None, None
 
+    numero_serie = _normaliza_codigo(numero_serie)
+    op = _normaliza_codigo(op)
+    tipo_producao = _normaliza_codigo(tipo_producao)
+    usuario = _normaliza_codigo(usuario) or "Operador_Logado"
+
     ext = _ext_from_mime(getattr(arquivo, "type", "image/jpeg"))
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    safe_tipo = _sanitize(tipo_producao)
-    safe_serie = _sanitize(numero_serie)
-    safe_op = _sanitize(op)
-    safe_user = _sanitize(usuario)
+    safe_tipo = _sanitize(tipo_producao or "NA")
+    safe_serie = _sanitize(numero_serie or "NA")
+    safe_op = _sanitize(op or "NA")
+    safe_user = _sanitize(usuario or "NA")
 
-    nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_user}__{ts}.{ext}"
+    nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_user}__{origem}__{ts}.{ext}"
     storage_path = f"{safe_tipo}/{safe_serie}/{nome_arquivo}"
 
     try:
@@ -127,25 +137,23 @@ def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, 
             storage_path,
             file_bytes,
             file_options={
-                "content-type": arquivo.type,
-                "upsert": "true"
-            }
+                "content-type": getattr(arquivo, "type", "image/jpeg"),
+                "upsert": "true",
+            },
         )
     except Exception as e:
         st.error(f"❌ Upload falhou:\n{e}")
         return None, None, None
 
-    # ✅ Bucket público → URL direta
-    url = supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
+    url = gerar_url(storage_path)
 
-    # grava no banco
     supabase.table("checklists_manga_pnm_fotos").insert({
         "numero_serie": numero_serie,
         "tipo_producao": tipo_producao,
         "op": op,
         "usuario": usuario,
-        "url": url,
-        "origem": origem,
+        "url": url or "",
+        "origem": origem,  # "vista_superior" | "etiqueta_aprovacao"
         "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "storage_path": storage_path,
         "nome_arquivo": nome_arquivo
@@ -153,11 +161,15 @@ def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, 
 
     return url, storage_path, nome_arquivo
 
-
 # ==============================
 # FUNÇÕES SUPABASE – APONTAMENTO
 # ==============================
 def salvar_apontamento(numero_serie, op, tipo_producao, usuario):
+    numero_serie = _normaliza_codigo(numero_serie)
+    op = _normaliza_codigo(op)
+    tipo_producao = _normaliza_codigo(tipo_producao)
+    usuario = _normaliza_codigo(usuario) or "Operador_Logado"
+
     check = supabase.table("apontamentos_manga_pnm") \
         .select("id") \
         .eq("numero_serie", numero_serie) \
@@ -189,7 +201,7 @@ def carregar_apontamentos():
         .execute()
 
     df = pd.DataFrame(data.data)
-    if not df.empty:
+    if not df.empty and "data_hora" in df.columns:
         df["data_hora"] = pd.to_datetime(df["data_hora"], utc=True).dt.tz_convert(TZ)
     return df
 
@@ -197,7 +209,7 @@ def carregar_apontamentos():
 # CALLBACK DO LEITOR
 # ==============================
 def processar_leitura():
-    leitura = st.session_state.get("input_leitor", "").strip()
+    leitura = _normaliza_codigo(st.session_state.get("input_leitor", ""))
     if not leitura:
         return
 
@@ -281,6 +293,11 @@ def pagina_apontamento():
 # CHECKLIST DE QUALIDADE
 # ==============================
 def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
+    numero_serie = _normaliza_codigo(numero_serie)
+    op = _normaliza_codigo(op)
+    tipo_producao = _normaliza_codigo(tipo_producao)
+    usuario = _normaliza_codigo(usuario) or "Operador_Logado"
+
     st.markdown(f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}")
 
     perguntas = [
@@ -315,10 +332,10 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         9: "PINTURA_EIXO",
         10: "SOLDA",
         11: "CAIXAS",
-        12: "FALTA SUSPENSOR",
-        13: "FALTA SPT_BOLSA",
-        14: "FALTA MAO_FRANCESA",
-        15: "GRAU DIVERGENTE"
+        12: "FALTA_SUSPENSOR",
+        13: "FALTA_SPT_BOLSA",
+        14: "FALTA_MAO_FRANCESA",
+        15: "GRAU_DIVERGENTE"
     }
 
     opcoes_modelos = {
@@ -371,19 +388,28 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 complementos[i] = ""
 
         st.divider()
-        st.markdown("### 📷 Foto (somente pelo tablet via upload)")
+        st.markdown("### 📷 Fotos do Checklist (tablet)")
 
         st.caption(
             "⚠️ Onde ver no Supabase:\n"
-            "- As IMAGENS ficam em **Storage → Buckets → checklist_fotos**\n"
-            "- A TABELA (checklists_manga_pnm_fotos) guarda **url / storage_path / número de série**"
+            "- IMAGENS: Storage → Buckets → checklist_fotos\n"
+            "- TABELA: checklists_manga_pnm_fotos (url / storage_path / série / origem)"
         )
 
-        fotos_upload = st.file_uploader(
-            "📎 Tirar/Anexar foto(s) no tablet",
+        st.markdown("#### ✅ 1) Vista superior do produto")
+        foto_vista_superior = st.file_uploader(
+            "📎 Enviar foto da vista superior",
             type=["jpg", "jpeg", "png", "webp"],
-            accept_multiple_files=True,
-            key=f"fotos_upload_{numero_serie}"
+            accept_multiple_files=False,
+            key=f"foto_superior_{numero_serie}"
+        )
+
+        st.markdown("#### ✅ 2) Etiqueta + Aprovação")
+        foto_etiqueta_aprovacao = st.file_uploader(
+            "📎 Enviar foto da etiqueta + aprovação",
+            type=["jpg", "jpeg", "png", "webp"],
+            accept_multiple_files=False,
+            key=f"foto_etiqueta_{numero_serie}"
         )
 
         submit = st.form_submit_button("💾 Salvar Checklist")
@@ -391,6 +417,11 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         if submit:
             if any(v is None for v in resultados.values()):
                 st.error("⚠️ Responda todos os itens")
+                return
+
+            # 🔒 obriga 2 fotos
+            if not foto_vista_superior or not foto_etiqueta_aprovacao:
+                st.error("⚠️ Envie as DUAS fotos obrigatórias: Vista Superior e Etiqueta + Aprovação.")
                 return
 
             # salva checklist
@@ -413,32 +444,42 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
             urls = []
             paths = []
 
-            if fotos_upload:
-                for arq in fotos_upload:
-                    url, storage_path, _ = upload_foto_para_supabase_storage(
-                        numero_serie=numero_serie,
-                        tipo_producao=tipo_producao,
-                        op=op,
-                        usuario=usuario,
-                        arquivo=arq,
-                        origem="upload"
-                    )
-                    if storage_path:
-                        paths.append(storage_path)
-                    if url:
-                        urls.append(url)
+            # Foto 1
+            url, storage_path, _ = upload_foto_para_supabase_storage(
+                numero_serie=numero_serie,
+                tipo_producao=tipo_producao,
+                op=op,
+                usuario=usuario,
+                arquivo=foto_vista_superior,
+                origem="vista_superior"
+            )
+            if storage_path:
+                paths.append(storage_path)
+            if url:
+                urls.append(url)
 
-            # ✅ debug visível
+            # Foto 2
+            url, storage_path, _ = upload_foto_para_supabase_storage(
+                numero_serie=numero_serie,
+                tipo_producao=tipo_producao,
+                op=op,
+                usuario=usuario,
+                arquivo=foto_etiqueta_aprovacao,
+                origem="etiqueta_aprovacao"
+            )
+            if storage_path:
+                paths.append(storage_path)
+            if url:
+                urls.append(url)
+
             if paths:
-                st.success(f"✅ {len(paths)} arquivo(s) enviado(s) para o Storage.")
+                st.success(f"✅ {len(paths)} foto(s) enviada(s) para o Storage.")
                 st.code("\n".join(paths))
-            else:
-                st.warning("⚠️ Nenhum arquivo foi enviado para o Storage. Se você não viu erro, é permissão/policy do bucket.")
 
             if urls:
-                st.success(f"✅ Checklist salvo + {len(urls)} foto(s) com link gerado")
+                st.success("✅ Checklist salvo + fotos ok.")
             else:
-                st.warning("✅ Checklist salvo, mas sem link (normal se bucket PRIVATE sem signed-url / ou sem foto)")
+                st.warning("✅ Checklist salvo, mas sem URL (verifique storage/public_url).")
 
             st.session_state["checklist_salvo"] = True
             st.rerun()
@@ -472,6 +513,11 @@ def pagina_checklist():
 
     df_apont = carregar_apontamentos()
     hoje = datetime.datetime.now(TZ).date()
+
+    if df_apont.empty:
+        st.info("Nenhum apontamento hoje")
+        return
+
     df_hoje = df_apont[df_apont["data_hora"].dt.date == hoje]
 
     if df_hoje.empty:
@@ -501,11 +547,16 @@ def pagina_checklist():
         st.success("✅ Todos os apontamentos de hoje já têm checklist salvo")
         return
 
+    opcoes_series = [_normaliza_codigo(x) for x in df_pendentes["numero_serie"].unique()]
+
     numero_serie = st.selectbox(
         "Selecione a série",
-        df_pendentes["numero_serie"].unique(),
+        opcoes_series,
         key="serie_selecionada"
     )
+
+    df_pendentes = df_pendentes.copy()
+    df_pendentes["numero_serie"] = df_pendentes["numero_serie"].apply(_normaliza_codigo)
 
     df_sel = df_pendentes[df_pendentes["numero_serie"] == numero_serie]
     if df_sel.empty:
