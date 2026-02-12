@@ -41,31 +41,50 @@ def _ext_from_mime(mime: str) -> str:
         return "webp"
     return "jpg"
 
+def _sanitize(s: str) -> str:
+    s = (s or "").strip()
+    # evita caracteres ruins no nome do arquivo
+    for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
+        s = s.replace(ch, "_")
+    return s.replace(" ", "_")
+
+def listar_fotos_da_serie(numero_serie: str, tipo_producao: str | None = None):
+    q = supabase.table("checklists_manga_pnm_fotos").select("*").eq("numero_serie", numero_serie)
+    if tipo_producao:
+        q = q.eq("tipo_producao", tipo_producao)
+    data = q.order("data_hora", desc=True).limit(20).execute()
+    df = pd.DataFrame(data.data)
+    if not df.empty and "data_hora" in df.columns:
+        df["data_hora"] = pd.to_datetime(df["data_hora"], utc=True).dt.tz_convert(TZ)
+    return df
+
 def upload_foto_para_supabase_storage(numero_serie: str, tipo_producao: str, op: str, usuario: str, arquivo, origem: str):
     """
     arquivo: UploadedFile do Streamlit (camera_input ou file_uploader)
-    Retorna: url_publica (str)
+    Retorna: (url_publica, storage_path, nome_arquivo)
     """
     if arquivo is None:
-        return None
+        return None, None, None
 
     try:
-        # bytes do arquivo
         file_bytes = arquivo.getvalue()
         if not file_bytes:
-            return None
+            return None, None, None
 
         ext = _ext_from_mime(getattr(arquivo, "type", "image/jpeg"))
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-        # caminho no bucket (organizado)
-        safe_tipo = (tipo_producao or "NA").replace(" ", "_")
-        safe_usuario = (usuario or "NA").replace(" ", "_")
-        safe_op = (op or "NA").replace(" ", "_")
+        safe_tipo = _sanitize(tipo_producao or "NA")
+        safe_usuario = _sanitize(usuario or "NA")
+        safe_op = _sanitize(op or "NA")
+        safe_serie = _sanitize(numero_serie or "NA")
 
-        storage_path = f"{safe_tipo}/{numero_serie}/{safe_op}_{safe_usuario}_{ts}.{ext}"
+        # ✅ NOME DO ARQUIVO COMEÇA COM A SÉRIE (PRA "APARECER" NO STORAGE)
+        nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_usuario}__{ts}.{ext}"
 
-        # upload
+        # ✅ PATH ORGANIZADO: TIPO/SERIE/ARQUIVO
+        storage_path = f"{safe_tipo}/{safe_serie}/{nome_arquivo}"
+
         supabase.storage.from_(BUCKET_FOTOS).upload(
             storage_path,
             file_bytes,
@@ -78,23 +97,32 @@ def upload_foto_para_supabase_storage(numero_serie: str, tipo_producao: str, op:
         # URL pública (funciona se o bucket for PUBLIC)
         url_publica = supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
 
-        # salva no banco (tabela de fotos)
-        supabase.table("checklists_manga_pnm_fotos").insert({
+        # ✅ grava no banco, mostrando claramente a série
+        payload = {
             "numero_serie": numero_serie,
             "tipo_producao": tipo_producao,
             "op": op,
             "usuario": usuario,
             "url": url_publica,
             "origem": origem,
-            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat()
-        }).execute()
+            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "storage_path": storage_path,
+            "nome_arquivo": nome_arquivo,
+        }
 
-        return url_publica
+        # se sua tabela não tiver as colunas novas, remova antes de inserir
+        try:
+            supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
+        except Exception:
+            payload.pop("storage_path", None)
+            payload.pop("nome_arquivo", None)
+            supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
+
+        return url_publica, storage_path, nome_arquivo
 
     except Exception as e:
-        # Não derruba o checklist inteiro por causa da foto
         st.error(f"❌ Erro ao enviar foto: {e}")
-        return None
+        return None, None, None
 
 # ==============================
 # FUNÇÕES SUPABASE – APONTAMENTO
@@ -224,9 +252,7 @@ def pagina_apontamento():
 # CHECKLIST DE QUALIDADE
 # ==============================
 def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
-    st.markdown(
-        f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}"
-    )
+    st.markdown(f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}")
 
     perguntas = [
         "Etiqueta do produto – As informações estão corretas / legíveis conforme modelo e gravação do eixo?",
@@ -316,15 +342,21 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 complementos[i] = ""
 
         st.divider()
-        st.markdown("### 📷 Fotos (opcional)")
-        st.caption("Use a câmera (se disponível) ou anexe imagens do PC/celular. As fotos vão para o Supabase Storage.")
+        st.markdown("### 📷 Fotos (com número de série no nome do arquivo)")
 
-        # 1) câmera (uma foto)
-        foto_camera = st.camera_input("Tirar foto agora", key=f"foto_camera_{numero_serie}")
+        # ✅ IMPORTANTE: não dá pra forçar traseira no st.camera_input.
+        st.info(
+            "⚠️ No Streamlit não dá pra forçar câmera traseira no `camera_input`. "
+            "Se abrir na frontal, use o botão de trocar câmera do próprio navegador/app de câmera "
+            "ou tire a foto no celular (traseira) e anexe abaixo."
+        )
 
-        # 2) upload múltiplo (para PC também)
+        # opção 1: camera_input (pode abrir frontal dependendo do dispositivo)
+        foto_camera = st.camera_input("Tirar foto (pode abrir frontal)", key=f"foto_camera_{numero_serie}")
+
+        # opção 2: upload (recomendado p/ traseira)
         fotos_upload = st.file_uploader(
-            "Anexar fotos (JPG/PNG/WebP)",
+            "📎 Anexar foto(s) (recomendado para usar câmera traseira do celular)",
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=True,
             key=f"fotos_upload_{numero_serie}"
@@ -337,7 +369,6 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
-            # salva itens do checklist (igual você já fazia)
             registros = []
             for i in resultados:
                 item_final = item_keys[i]
@@ -355,11 +386,11 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
 
             supabase.table("checklists_manga_pnm_detalhes").insert(registros).execute()
 
-            # envia fotos (se tiver)
+            # Upload das fotos
             urls = []
 
             if foto_camera is not None:
-                url = upload_foto_para_supabase_storage(
+                url, _, _ = upload_foto_para_supabase_storage(
                     numero_serie=numero_serie,
                     tipo_producao=tipo_producao,
                     op=op,
@@ -372,7 +403,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
 
             if fotos_upload:
                 for arq in fotos_upload:
-                    url = upload_foto_para_supabase_storage(
+                    url, _, _ = upload_foto_para_supabase_storage(
                         numero_serie=numero_serie,
                         tipo_producao=tipo_producao,
                         op=op,
@@ -384,12 +415,28 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                         urls.append(url)
 
             if urls:
-                st.success(f"✅ Checklist salvo + {len(urls)} foto(s) enviada(s) para o Supabase")
+                st.success(f"✅ Checklist salvo + {len(urls)} foto(s) enviada(s)")
             else:
                 st.success("✅ Checklist salvo (sem fotos)")
 
             st.session_state["checklist_salvo"] = True
             st.rerun()
+
+    # ✅ FORA DO FORM: mostra fotos já salvas da série
+    st.divider()
+    st.markdown(f"### 🖼️ Fotos já salvas — Série **{numero_serie}**")
+    df_fotos = listar_fotos_da_serie(numero_serie, tipo_producao=tipo_producao)
+    if df_fotos.empty:
+        st.caption("Nenhuma foto salva ainda para esta série.")
+    else:
+        # mostra tabela com série + url
+        cols_show = [c for c in ["data_hora", "numero_serie", "tipo_producao", "op", "usuario", "origem", "nome_arquivo", "url"] if c in df_fotos.columns]
+        st.dataframe(df_fotos[cols_show], use_container_width=True)
+
+        # galeria simples
+        for _, r in df_fotos.head(6).iterrows():
+            st.markdown(f"**Série:** {r.get('numero_serie','-')} | **OP:** {r.get('op','-')} | **Usuário:** {r.get('usuario','-')}")
+            st.image(r.get("url"), use_container_width=True)
 
 # ==============================
 # PÁGINA CHECKLIST
@@ -435,7 +482,6 @@ def pagina_checklist():
     )
 
     df_sel = df_pendentes[df_pendentes["numero_serie"] == numero_serie]
-
     if df_sel.empty:
         st.warning("Série já inspecionada")
         return
