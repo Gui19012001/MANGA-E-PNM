@@ -390,11 +390,6 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         st.divider()
         st.markdown("### 📷 Fotos do Checklist (tablet)")
 
-        st.caption(
-            "⚠️ Onde ver no Supabase:\n"
-            "- IMAGENS: Storage → Buckets → checklist_fotos\n"
-            "- TABELA: checklists_manga_pnm_fotos (url / storage_path / série / origem)"
-        )
 
         st.markdown("#### ✅ 1) Vista superior do produto")
         foto_vista_superior = st.file_uploader(
