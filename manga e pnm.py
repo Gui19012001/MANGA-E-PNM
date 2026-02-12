@@ -75,91 +75,68 @@ def listar_arquivos_no_storage(prefixo: str):
 
 def gerar_url(storage_path: str):
     """
-    Se bucket for public -> public_url
-    Se bucket for private -> signed_url
+    Bucket PUBLIC → usa public_url direto
     """
     try:
-        if USAR_SIGNED_URL:
-            signed = supabase.storage.from_(BUCKET_FOTOS).create_signed_url(storage_path, SIGNED_URL_EXPIRA_SEG)
-            # signed pode vir como dict {"signedURL": "..."} dependendo lib
-            if isinstance(signed, dict):
-                return signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
-            return signed
-        else:
-            return supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
+        return supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
+
     except Exception as e:
         st.error(f"❌ Erro ao gerar URL para {storage_path}: {e}")
         return None
 
-def upload_foto_para_supabase_storage(numero_serie: str, tipo_producao: str, op: str, usuario: str, arquivo, origem: str):
-    """
-    arquivo: UploadedFile do Streamlit (file_uploader)
-    Retorna: (url, storage_path, nome_arquivo)
-    """
+
+def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, arquivo, origem):
+
     if arquivo is None:
         return None, None, None
 
     file_bytes = arquivo.getvalue()
     if not file_bytes:
-        st.error("❌ Arquivo veio vazio (0 bytes).")
+        st.error("❌ Arquivo vazio")
         return None, None, None
 
     ext = _ext_from_mime(getattr(arquivo, "type", "image/jpeg"))
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    safe_tipo = _sanitize(tipo_producao or "NA")
-    safe_usuario = _sanitize(usuario or "NA")
-    safe_op = _sanitize(op or "NA")
-    safe_serie = _sanitize(numero_serie or "NA")
+    safe_tipo = _sanitize(tipo_producao)
+    safe_serie = _sanitize(numero_serie)
+    safe_op = _sanitize(op)
+    safe_user = _sanitize(usuario)
 
-    nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_usuario}__{ts}.{ext}"
+    nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_user}__{ts}.{ext}"
     storage_path = f"{safe_tipo}/{safe_serie}/{nome_arquivo}"
 
-    # ✅ Upload com checagem de resposta
     try:
-        upload_resp = supabase.storage.from_(BUCKET_FOTOS).upload(
+        supabase.storage.from_(BUCKET_FOTOS).upload(
             storage_path,
             file_bytes,
             file_options={
-                "content-type": getattr(arquivo, "type", "image/jpeg"),
+                "content-type": arquivo.type,
                 "upsert": "true"
             }
         )
     except Exception as e:
-        st.error(f"❌ Upload falhou (permite escrever no bucket?)\n\n{e}")
+        st.error(f"❌ Upload falhou:\n{e}")
         return None, None, None
 
-    # Algumas libs retornam dict com erro/status
-    if isinstance(upload_resp, dict) and upload_resp.get("error"):
-        st.error(f"❌ Supabase retornou erro no upload: {upload_resp.get('error')}")
-        return None, None, None
+    # ✅ Bucket público → URL direta
+    url = supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
 
-    url = gerar_url(storage_path)
-    if not url:
-        st.warning("⚠️ Upload ok, mas não consegui gerar URL (bucket private sem signed_url ou erro).")
-
-    # ✅ grava no banco
-    payload = {
+    # grava no banco
+    supabase.table("checklists_manga_pnm_fotos").insert({
         "numero_serie": numero_serie,
         "tipo_producao": tipo_producao,
         "op": op,
         "usuario": usuario,
-        "url": url or "",
-        "origem": origem,  # "upload"
+        "url": url,
+        "origem": origem,
         "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "storage_path": storage_path,
-        "nome_arquivo": nome_arquivo,
-    }
-
-    try:
-        supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
-    except Exception:
-        # fallback se sua tabela não tiver colunas extras
-        payload.pop("storage_path", None)
-        payload.pop("nome_arquivo", None)
-        supabase.table("checklists_manga_pnm_fotos").insert(payload).execute()
+        "nome_arquivo": nome_arquivo
+    }).execute()
 
     return url, storage_path, nome_arquivo
+
 
 # ==============================
 # FUNÇÕES SUPABASE – APONTAMENTO
