@@ -109,11 +109,12 @@ def gerar_url(storage_path: str):
 
 def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, arquivo, origem):
     if arquivo is None:
+        st.error("❌ Nenhum arquivo recebido pelo uploader.")
         return None, None, None
 
     file_bytes = arquivo.getvalue()
     if not file_bytes:
-        st.error("❌ Arquivo vazio")
+        st.error("❌ Arquivo veio vazio (0 bytes).")
         return None, None, None
 
     numero_serie = _normaliza_codigo(numero_serie)
@@ -132,34 +133,78 @@ def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, 
     nome_arquivo = f"{safe_serie}__OP{safe_op}__{safe_user}__{origem}__{ts}.{ext}"
     storage_path = f"{safe_tipo}/{safe_serie}/{nome_arquivo}"
 
+    # 1) Upload no Storage (com retorno)
     try:
-        supabase.storage.from_(BUCKET_FOTOS).upload(
-            storage_path,
-            file_bytes,
+        resp = supabase.storage.from_(BUCKET_FOTOS).upload(
+            path=storage_path,
+            file=file_bytes,
             file_options={
                 "content-type": getattr(arquivo, "type", "image/jpeg"),
-                "upsert": "true",
+                "upsert": True,  # <-- boolean
             },
         )
     except Exception as e:
-        st.error(f"❌ Upload falhou:\n{e}")
+        st.error(f"❌ EXCEÇÃO no upload do Storage:\n{e}")
         return None, None, None
 
-    url = gerar_url(storage_path)
+    # Algumas versões retornam dict/obj com erro, sem exception:
+    if isinstance(resp, dict) and resp.get("error"):
+        st.error(f"❌ ERRO do Storage (resp.error): {resp['error']}")
+        st.code(str(resp))
+        return None, None, None
 
-    supabase.table("checklists_manga_pnm_fotos").insert({
-        "numero_serie": numero_serie,
-        "tipo_producao": tipo_producao,
-        "op": op,
-        "usuario": usuario,
-        "url": url or "",
-        "origem": origem,  # "vista_superior" | "etiqueta_aprovacao"
-        "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "storage_path": storage_path,
-        "nome_arquivo": nome_arquivo
-    }).execute()
+    # 2) Confirma se o arquivo apareceu na pasta (debug)
+    prefixo = f"{safe_tipo}/{safe_serie}"
+    try:
+        arquivos = supabase.storage.from_(BUCKET_FOTOS).list(path=prefixo) or []
+        nomes = [a.get("name") for a in arquivos if isinstance(a, dict)]
+        if nome_arquivo not in nomes:
+            st.warning("⚠️ Upload executou, mas não encontrei o arquivo na listagem do Storage.")
+            st.write("Prefixo:", prefixo)
+            st.write("Listagem:", nomes)
+    except Exception as e:
+        st.warning(f"⚠️ Não consegui listar Storage para confirmar (isso já indica policy): {e}")
+
+    # 3) URL
+    url = None
+    if USAR_SIGNED_URL:
+        try:
+            signed = supabase.storage.from_(BUCKET_FOTOS).create_signed_url(storage_path, SIGNED_URL_EXPIRA_SEG)
+            # versões variam
+            url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
+        except Exception as e:
+            st.warning(f"⚠️ Não consegui gerar signed URL: {e}")
+    else:
+        try:
+            url = supabase.storage.from_(BUCKET_FOTOS).get_public_url(storage_path)
+        except Exception as e:
+            st.warning(f"⚠️ Não consegui gerar public URL: {e}")
+
+    # 4) Inserir registro na tabela de fotos (com checagem)
+    try:
+        ins = supabase.table("checklists_manga_pnm_fotos").insert({
+            "numero_serie": numero_serie,
+            "tipo_producao": tipo_producao,
+            "op": op,
+            "usuario": usuario,
+            "url": url or "",
+            "origem": origem,
+            "data_hora": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "storage_path": storage_path,
+            "nome_arquivo": nome_arquivo
+        }).execute()
+
+        # checa erro (muito importante)
+        if getattr(ins, "error", None):
+            st.error(f"❌ ERRO ao inserir na tabela checklists_manga_pnm_fotos: {ins.error}")
+            return url, storage_path, nome_arquivo
+
+    except Exception as e:
+        st.error(f"❌ EXCEÇÃO ao inserir registro da foto: {e}")
+        return url, storage_path, nome_arquivo
 
     return url, storage_path, nome_arquivo
+
 
 # ==============================
 # FUNÇÕES SUPABASE – APONTAMENTO
