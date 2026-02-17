@@ -433,23 +433,14 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 complementos[i] = ""
 
         st.divider()
-        st.markdown("### 📷 Fotos do Checklist (tablet)")
+        st.markdown("### 📷 Foto do Checklist (tablet)")
 
-
-        st.markdown("#### ✅ 1) Vista superior do produto")
+        st.markdown("#### ✅ Vista superior do produto (obrigatória)")
         foto_vista_superior = st.file_uploader(
             "📎 Enviar foto da vista superior",
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=False,
             key=f"foto_superior_{numero_serie}"
-        )
-
-        st.markdown("#### ✅ 2) Etiqueta + Aprovação")
-        foto_etiqueta_aprovacao = st.file_uploader(
-            "📎 Enviar foto da etiqueta + aprovação",
-            type=["jpg", "jpeg", "png", "webp"],
-            accept_multiple_files=False,
-            key=f"foto_etiqueta_{numero_serie}"
         )
 
         submit = st.form_submit_button("💾 Salvar Checklist")
@@ -459,9 +450,9 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
-            # 🔒 obriga 2 fotos
-            if not foto_vista_superior or not foto_etiqueta_aprovacao:
-                st.error("⚠️ Envie as DUAS fotos obrigatórias: Vista Superior e Etiqueta + Aprovação.")
+            # 🔒 obriga 1 foto
+            if not foto_vista_superior:
+                st.error("⚠️ Envie a foto obrigatória: Vista Superior.")
                 return
 
             # salva checklist
@@ -484,7 +475,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
             urls = []
             paths = []
 
-            # Foto 1
+            # Foto única
             url, storage_path, _ = upload_foto_para_supabase_storage(
                 numero_serie=numero_serie,
                 tipo_producao=tipo_producao,
@@ -498,26 +489,12 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
             if url:
                 urls.append(url)
 
-            # Foto 2
-            url, storage_path, _ = upload_foto_para_supabase_storage(
-                numero_serie=numero_serie,
-                tipo_producao=tipo_producao,
-                op=op,
-                usuario=usuario,
-                arquivo=foto_etiqueta_aprovacao,
-                origem="etiqueta_aprovacao"
-            )
-            if storage_path:
-                paths.append(storage_path)
-            if url:
-                urls.append(url)
-
             if paths:
-                st.success(f"✅ {len(paths)} foto(s) enviada(s) para o Storage.")
+                st.success(f"✅ {len(paths)} foto enviada para o Storage.")
                 st.code("\n".join(paths))
 
             if urls:
-                st.success("✅ Checklist salvo + fotos ok.")
+                st.success("✅ Checklist salvo + foto ok.")
             else:
                 st.warning("✅ Checklist salvo, mas sem URL (verifique storage/public_url).")
 
@@ -544,6 +521,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
     else:
         st.success(f"✅ Achei {len(arquivos)} arquivo(s) no Storage com prefixo: {prefixo}")
         st.write([a.get("name") for a in arquivos if isinstance(a, dict)])
+
 
 # ==============================
 # PÁGINA CHECKLIST
