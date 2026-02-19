@@ -170,7 +170,6 @@ def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, 
     if USAR_SIGNED_URL:
         try:
             signed = supabase.storage.from_(BUCKET_FOTOS).create_signed_url(storage_path, SIGNED_URL_EXPIRA_SEG)
-            # versões variam
             url = signed.get("signedURL") or signed.get("signedUrl") or signed.get("signed_url")
         except Exception as e:
             st.warning(f"⚠️ Não consegui gerar signed URL: {e}")
@@ -194,7 +193,6 @@ def upload_foto_para_supabase_storage(numero_serie, tipo_producao, op, usuario, 
             "nome_arquivo": nome_arquivo
         }).execute()
 
-        # checa erro (muito importante)
         if getattr(ins, "error", None):
             st.error(f"❌ ERRO ao inserir na tabela checklists_manga_pnm_fotos: {ins.error}")
             return url, storage_path, nome_arquivo
@@ -435,9 +433,9 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         st.divider()
         st.markdown("### 📷 Foto do Checklist (tablet)")
 
-        st.markdown("#### ✅ Vista superior do produto (obrigatória)")
+        st.markdown("#### 📷 Vista superior do produto (opcional)")
         foto_vista_superior = st.file_uploader(
-            "📎 Enviar foto da vista superior",
+            "📎 Enviar foto da vista superior (opcional)",
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=False,
             key=f"foto_superior_{numero_serie}"
@@ -450,12 +448,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
                 st.error("⚠️ Responda todos os itens")
                 return
 
-            # 🔒 obriga 1 foto
-            if not foto_vista_superior:
-                st.error("⚠️ Envie a foto obrigatória: Vista Superior.")
-                return
-
-            # salva checklist
+            # ✅ NÃO obriga foto: salva sempre o checklist
             registros = []
             for i in resultados:
                 item_final = item_keys[i]
@@ -475,19 +468,20 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
             urls = []
             paths = []
 
-            # Foto única
-            url, storage_path, _ = upload_foto_para_supabase_storage(
-                numero_serie=numero_serie,
-                tipo_producao=tipo_producao,
-                op=op,
-                usuario=usuario,
-                arquivo=foto_vista_superior,
-                origem="vista_superior"
-            )
-            if storage_path:
-                paths.append(storage_path)
-            if url:
-                urls.append(url)
+            # ✅ Foto opcional: só faz upload se anexou
+            if foto_vista_superior is not None:
+                url, storage_path, _ = upload_foto_para_supabase_storage(
+                    numero_serie=numero_serie,
+                    tipo_producao=tipo_producao,
+                    op=op,
+                    usuario=usuario,
+                    arquivo=foto_vista_superior,
+                    origem="vista_superior"
+                )
+                if storage_path:
+                    paths.append(storage_path)
+                if url:
+                    urls.append(url)
 
             if paths:
                 st.success(f"✅ {len(paths)} foto enviada para o Storage.")
@@ -496,7 +490,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
             if urls:
                 st.success("✅ Checklist salvo + foto ok.")
             else:
-                st.warning("✅ Checklist salvo, mas sem URL (verifique storage/public_url).")
+                st.success("✅ Checklist salvo (sem foto).")
 
             st.session_state["checklist_salvo"] = True
             st.rerun()
@@ -605,6 +599,7 @@ def app():
 
 if __name__ == "__main__":
     app()
+
 
 
 
