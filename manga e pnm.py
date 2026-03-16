@@ -356,7 +356,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         "Os cordões de solda do eixo estão conformes?",
         "As caixas estão corretas? Escreva qual o modelo:",
         "Etiqueta pede suspensor?",
-        "Etiqueta pede Suporte da Bolsa?",
+        "Etiqueta pede Suporte da Bolsa (APOIO DE MOLA)?",
         "Etiqueta pede Mão Francesa?"
     ]
 
