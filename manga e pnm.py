@@ -4,8 +4,7 @@ import json
 import math
 import datetime
 from pathlib import Path
-from html import escape
-from urllib.parse import quote_plus
+
 import pandas as pd
 import pytz
 import requests
@@ -18,147 +17,37 @@ from supabase import create_client
 # ==============================
 # CONFIG
 # ==============================
-APP_NAME = "MANGA E PNM"
-
 env_path = Path(__file__).parent / "teste.env"
 load_dotenv(env_path)
 
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-def _cfg(key: str, default=None):
-    try:
-        if key in st.secrets:
-            return st.secrets[key]
-    except Exception:
-        pass
-    return os.getenv(key, default)
-
-
-SUPABASE_URL = _cfg("SUPABASE_URL")
-SUPABASE_KEY = _cfg("SUPABASE_KEY")
-
-TOTVS_API_BASE = str(_cfg(
+TOTVS_API_BASE = os.getenv(
     "TOTVS_API_BASE",
     "http://200.201.240.47:8383/rest01/PY_APONTAMEN"
-)).rstrip("/")
+).rstrip("/")
 
-TOTVS_TIMEOUT = int(_cfg("TOTVS_TIMEOUT", "100"))
-TOTVS_USERNAME = str(_cfg("TOTVS_USERNAME", "")).strip()
-TOTVS_PASSWORD = str(_cfg("TOTVS_PASSWORD", "")).strip()
-TOTVS_TENANT_ID = str(_cfg("TOTVS_TENANT_ID", "")).strip()
+TOTVS_TIMEOUT = int(os.getenv("TOTVS_TIMEOUT", "100"))
+TOTVS_USERNAME = os.getenv("TOTVS_USERNAME", "").strip()
+TOTVS_PASSWORD = os.getenv("TOTVS_PASSWORD", "").strip()
+TOTVS_TENANT_ID = os.getenv("TOTVS_TENANT_ID", "").strip()
 
 if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("SUPABASE_URL / SUPABASE_KEY não encontrados no teste.env ou st.secrets")
+    raise RuntimeError("SUPABASE_URL / SUPABASE_KEY não encontrados no teste.env")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 TZ = pytz.timezone("America/Sao_Paulo")
 
 st.set_page_config(
-    page_title=APP_NAME,
+    page_title="Apontamento MANGA / PNM",
     layout="wide"
 )
 
 BUCKET_FOTOS = "checklist_fotos"
 USAR_SIGNED_URL = False
 SIGNED_URL_EXPIRA_SEG = 60 * 60
-
-# ==============================
-# LOGIN APP
-# ==============================
-USUARIOS_FIXOS = [
-    "LUCAS.SILVA",
-    "VICTOR.BARBOSA",
-    "FABIO.VIEIRA",
-    "MARCOS.MIRANDA",
-]
-
-
-def _usuario_env_key(usuario: str) -> str:
-    return re.sub(r"[^A-Z0-9]+", "_", usuario.upper()).strip("_")
-
-
-def _carregar_usuarios_app():
-    usuarios = {}
-    for usuario in USUARIOS_FIXOS:
-        chave_env = f"APP_PASS_{_usuario_env_key(usuario)}"
-        senha = str(_cfg(chave_env, "")).strip()
-        usuarios[usuario.upper()] = senha
-    return usuarios
-
-
-USUARIOS_APP = _carregar_usuarios_app()
-
-
-def inicializar_estado():
-    defaults = {
-        "autenticado": False,
-        "usuario": None,
-        "tipo_producao": "MANGA",
-        "numero_serie": "",
-        "op": "",
-        "erro": None,
-        "sucesso": None,
-        "aviso": None,
-        "input_leitor": "",
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-
-def validar_login_app(usuario: str, senha: str):
-    usuario = (usuario or "").strip().upper()
-    senha = str(senha or "").strip()
-
-    if not usuario or not senha:
-        return False, "Informe usuário e senha."
-
-    if usuario not in USUARIOS_APP:
-        return False, "Usuário inválido."
-
-    senha_cadastrada = USUARIOS_APP.get(usuario, "")
-    if not senha_cadastrada:
-        return False, f"Senha do usuário {usuario} não configurada no env."
-
-    if senha != senha_cadastrada:
-        return False, "Senha inválida."
-
-    return True, None
-
-
-def tela_login():
-    st.markdown(f"## 🔐 {APP_NAME}")
-    st.caption("Acesso restrito")
-
-    with st.form("form_login_app", clear_on_submit=False):
-        usuario = st.text_input("Usuário", placeholder="Ex.: LUCAS.SILVA").strip().upper()
-        senha = st.text_input("Senha", type="password")
-        entrar = st.form_submit_button("Entrar", use_container_width=True)
-
-    if entrar:
-        ok, msg = validar_login_app(usuario, senha)
-        if ok:
-            st.session_state["autenticado"] = True
-            st.session_state["usuario"] = usuario
-            st.rerun()
-        st.error(msg)
-
-    st.stop()
-
-
-def exigir_login():
-    if not st.session_state.get("autenticado", False):
-        tela_login()
-
-
-def logout_app():
-    for chave in [
-        "autenticado", "usuario", "numero_serie", "op",
-        "erro", "sucesso", "aviso", "input_leitor"
-    ]:
-        if chave in st.session_state:
-            del st.session_state[chave]
-    inicializar_estado()
 
 
 # ==============================
@@ -255,30 +144,8 @@ def headers_totvs():
     return headers
 
 
-def headers_totvs_get():
-    headers = {
-        "Accept": "application/json",
-    }
-    if TOTVS_TENANT_ID:
-        headers["tenantId"] = TOTVS_TENANT_ID
-    return headers
-
-
-def _totvs_auth():
-    return HTTPBasicAuth(TOTVS_USERNAME, TOTVS_PASSWORD)
-
-
-def _texto_body_http(body):
-    if isinstance(body, (dict, list)):
-        try:
-            return json.dumps(body, ensure_ascii=False)
-        except Exception:
-            return str(body)
-    return str(body or "").strip()
-
-
 # ==============================
-# CONSULTA TOTVS - GET ID
+# TRATAMENTO RETORNO TOTVS
 # ==============================
 def corpo_resposta_http(resp):
     try:
@@ -288,143 +155,6 @@ def corpo_resposta_http(resp):
         return txt if txt else "Sem conteúdo"
 
 
-def consultar_numero_serie_totvs(numero_serie: str):
-    numero_serie = _normaliza_codigo(numero_serie)
-
-    if not numero_serie:
-        return {
-            "ok": False,
-            "existe": False,
-            "mensagem": "Número de série inválido para consulta.",
-            "body": None,
-            "url": None,
-            "status_code": None,
-        }
-
-    if not TOTVS_USERNAME or not TOTVS_PASSWORD:
-        return {
-            "ok": False,
-            "existe": False,
-            "mensagem": "TOTVS_USERNAME ou TOTVS_PASSWORD não configurados.",
-            "body": None,
-            "url": None,
-            "status_code": None,
-        }
-
-    urls = [
-        f"{TOTVS_API_BASE}/get_id?{numero_serie}",
-        f"{TOTVS_API_BASE}/get_id?{quote_plus(numero_serie)}",
-        f"{TOTVS_API_BASE}/get_id?id={quote_plus(numero_serie)}",
-    ]
-
-    ultimo_resultado = None
-
-    for url in urls:
-        try:
-            response = requests.get(
-                url,
-                headers=headers_totvs_get(),
-                auth=_totvs_auth(),
-                timeout=TOTVS_TIMEOUT
-            )
-
-            body = corpo_resposta_http(response)
-            body_txt = _texto_body_http(body).strip()
-            body_upper = body_txt.upper()
-
-            if response.status_code in (200, 204, 404):
-                if (
-                    body_txt in ("", "[]", "{}", "null", "None")
-                    or "NAO ENCONTR" in body_upper
-                    or "NÃO ENCONTR" in body_upper
-                    or "NOT FOUND" in body_upper
-                ):
-                    return {
-                        "ok": True,
-                        "existe": False,
-                        "mensagem": f"Série {numero_serie} não encontrada no TOTVS.",
-                        "body": body,
-                        "url": url,
-                        "status_code": response.status_code,
-                    }
-
-                return {
-                    "ok": True,
-                    "existe": True,
-                    "mensagem": f"Série {numero_serie} já encontrada no TOTVS.",
-                    "body": body,
-                    "url": url,
-                    "status_code": response.status_code,
-                }
-
-            if response.status_code == 500:
-                if (
-                    body_txt in ("", "[]", "{}", "null", "None")
-                    or "NAO ENCONTR" in body_upper
-                    or "NÃO ENCONTR" in body_upper
-                    or "NOT FOUND" in body_upper
-                ):
-                    return {
-                        "ok": True,
-                        "existe": False,
-                        "mensagem": f"Série {numero_serie} não encontrada no TOTVS.",
-                        "body": body,
-                        "url": url,
-                        "status_code": response.status_code,
-                    }
-
-                if numero_serie in body_txt:
-                    return {
-                        "ok": True,
-                        "existe": True,
-                        "mensagem": f"Série {numero_serie} já encontrada no TOTVS.",
-                        "body": body,
-                        "url": url,
-                        "status_code": response.status_code,
-                    }
-
-                ultimo_resultado = {
-                    "ok": False,
-                    "existe": False,
-                    "mensagem": "Falha na verificação do número de série no TOTVS.",
-                    "body": body,
-                    "url": url,
-                    "status_code": response.status_code,
-                }
-                continue
-
-            ultimo_resultado = {
-                "ok": False,
-                "existe": False,
-                "mensagem": f"Falha na verificação do número de série no TOTVS. HTTP {response.status_code}.",
-                "body": body,
-                "url": url,
-                "status_code": response.status_code,
-            }
-
-        except Exception as e:
-            ultimo_resultado = {
-                "ok": False,
-                "existe": False,
-                "mensagem": f"Falha ao verificar série no TOTVS: {e}",
-                "body": None,
-                "url": url,
-                "status_code": None,
-            }
-
-    return ultimo_resultado or {
-        "ok": False,
-        "existe": False,
-        "mensagem": "Não foi possível verificar a série no TOTVS.",
-        "body": None,
-        "url": None,
-        "status_code": None,
-    }
-
-
-# ==============================
-# TRATAMENTO RETORNO TOTVS
-# ==============================
 def normalizar_quebras(msg: str) -> str:
     return str(msg).replace("\r\n", "\n").replace("\r", "\n")
 
@@ -461,36 +191,6 @@ def converter_saldo_para_float(valor):
         return float(txt)
     except Exception:
         return None
-
-
-def _fmt_qtd_br(valor):
-    num = converter_saldo_para_float(valor)
-    if num is None:
-        return str(valor).strip()
-
-    txt = f"{num:,.2f}"
-    txt = txt.replace(",", "X").replace(".", ",").replace("X", ".")
-    txt = txt.replace("-", "- ")
-    return txt
-
-
-def _fmt_status_item(valor):
-    txt = re.sub(r"\s+", " ", str(valor or "")).strip()
-    txt_upper = txt.upper()
-
-    mapa = {
-        "SEM SALDO EM ESTOQUE": "Falta de saldo",
-        "SALDO INDISPONIVEL": "Saldo Indisponivel",
-        "SALDO INDISPONÍVEL": "Saldo Indisponivel",
-    }
-
-    if txt_upper in mapa:
-        return mapa[txt_upper]
-
-    if not txt:
-        return "-"
-
-    return txt[:1].upper() + txt[1:]
 
 
 def extrair_itens_erro_estoque(msg):
@@ -547,29 +247,21 @@ def formatar_mensagem_tela_totvs(msg):
         "NÃO EXISTE QUANTIDADE SUFICIENTE EM ESTOQUE" in texto_upper
         or "NAO EXISTE QUANTIDADE SUFICIENTE EM ESTOQUE" in texto_upper
     ):
-        linhas = [
-            "Não existe quantidade suficiente em estoque para atender esta requisição. Itens Sem Sld / Bloqs. / Empenhos Pendentes Produto Armazem",
-            "",
-            "CÓDIGO | ARMAZEM | QUANTIDADE | STATUS"
-        ]
+        resumo = "Não existe quantidade suficiente em estoque para atender esta requisição."
+        cabecalho = "Itens Sem Sld/ Bloqs./ Empenhos Pendentes Produto Armazem Saldo Ocorrencia"
+
+        linhas = [resumo, cabecalho, ""]
 
         if itens:
             for item in itens:
-                codigo = item.get("produto", "").strip()
-                armazem = item.get("armazem", "").strip()
-                quantidade = _fmt_qtd_br(item.get("saldo"))
-                status = _fmt_status_item(item.get("ocorrencia"))
-                linhas.append(f"{codigo} | {armazem} | {quantidade} | {status}")
+                linha = f"{item['produto']:<30}{item['armazem']:<23}{item['saldo']:<10} {item['ocorrencia']}"
+                linhas.append(linha)
         else:
-            linhas.append("Sem itens identificados.")
+            linhas.append(texto_unico)
 
         return "\n".join(linhas).strip(), itens
 
-    linhas = [
-        re.sub(r"\s+", " ", linha).strip()
-        for linha in texto.split("\n")
-        if linha.strip()
-    ]
+    linhas = [re.sub(r"\s+", " ", linha).strip() for linha in texto.split("\n") if linha.strip()]
     return "\n".join(linhas).strip(), itens
 
 
@@ -630,6 +322,7 @@ def interpretar_retorno_totvs(response):
 
 # ==============================
 # APONTAMENTO TOTVS
+# MANTIDO IGUAL AO TESTE
 # ==============================
 def apontar_op_totvs(op: str, quant: str, lotectl: str):
     op = normalizar_texto(op)
@@ -648,7 +341,7 @@ def apontar_op_totvs(op: str, quant: str, lotectl: str):
         return False, {"erro": "Informe a quantidade."}
 
     try:
-        int(float(quant))
+        quant_valor = int(float(quant))
     except Exception:
         return False, {"erro": f"Quantidade inválida: {quant}"}
 
@@ -665,7 +358,7 @@ def apontar_op_totvs(op: str, quant: str, lotectl: str):
             url,
             json=payload,
             headers=headers_totvs(),
-            auth=_totvs_auth(),
+            auth=HTTPBasicAuth(TOTVS_USERNAME, TOTVS_PASSWORD),
             timeout=TOTVS_TIMEOUT
         )
 
@@ -801,33 +494,32 @@ def salvar_ocorrencias_apontamento_totvs(numero_serie, op, tipo_producao, usuari
     numero_serie = _normaliza_codigo(numero_serie)
     op = _normaliza_codigo(op)
     tipo_producao = _normaliza_codigo(tipo_producao)
-    usuario = _normaliza_codigo(usuario) or st.session_state.get("usuario") or "Operador_Logado"
+    usuario = _normaliza_codigo(usuario) or "Operador_Logado"
 
     if not itens_estoque:
-        return False, "Nenhum item de ocorrência para salvar."
+        return
 
     registros = []
     for item in itens_estoque:
-        codigo = _normaliza_codigo(item.get("produto"))
-        quantidade = item.get("saldo_num")
-
-        if quantidade is None:
-            quantidade = converter_saldo_para_float(item.get("saldo"))
-
         registros.append({
             "numero_serie": numero_serie,
             "op": op,
-            "codigo": codigo,
-            "quantidade": quantidade,
             "tipo_producao": tipo_producao,
-            "usuario": usuario
+            "usuario": usuario,
+            "produto": item.get("produto"),
+            "armazem": item.get("armazem"),
+            "saldo": item.get("saldo"),
+            "saldo_num": item.get("saldo_num"),
+            "ocorrencia": item.get("ocorrencia"),
+            "motivo": item.get("motivo"),
+            "resposta_api": resposta_api,
+            "data_hora": _agora_utc_iso()
         })
 
     try:
         supabase.table("ocorrencias_apontamento_totvs").insert(registros).execute()
-        return True, f"{len(registros)} ocorrência(s) salva(s) com sucesso."
-    except Exception as e:
-        return False, f"Falha ao salvar ocorrências no Supabase: {e}"
+    except Exception:
+        pass
 
 
 # ==============================
@@ -927,7 +619,7 @@ def executar_apontamento_totvs(fila_id):
     op = _normaliza_codigo(item.get("op"))
     numero_serie = _normaliza_codigo(item.get("numero_serie"))
     tipo_producao = _normaliza_codigo(item.get("tipo_producao"))
-    usuario = _normaliza_codigo(item.get("usuario")) or st.session_state.get("usuario") or "Operador_Logado"
+    usuario = _normaliza_codigo(item.get("usuario")) or "Operador_Logado"
     tentativas = int(item.get("tentativas") or 0) + 1
 
     if not op:
@@ -937,27 +629,6 @@ def executar_apontamento_totvs(fila_id):
             "tentativas": tentativas,
             "ultimo_erro": msg,
             "resposta_api": msg
-        })
-        return False, msg
-
-    verificacao = consultar_numero_serie_totvs(numero_serie)
-    if not verificacao["ok"]:
-        msg = verificacao["mensagem"]
-        atualizar_item_fila(fila_id, {
-            "status": "erro",
-            "tentativas": tentativas,
-            "ultimo_erro": msg,
-            "resposta_api": json.dumps(verificacao, ensure_ascii=False, indent=2)
-        })
-        return False, msg
-
-    if verificacao["existe"]:
-        msg = f"Série {numero_serie} já está apontada no TOTVS."
-        atualizar_item_fila(fila_id, {
-            "status": "erro",
-            "tentativas": tentativas,
-            "ultimo_erro": msg,
-            "resposta_api": json.dumps(verificacao, ensure_ascii=False, indent=2)
         })
         return False, msg
 
@@ -971,6 +642,10 @@ def executar_apontamento_totvs(fila_id):
             "ultimo_erro": msg,
             "resposta_api": json.dumps(retorno, ensure_ascii=False, indent=2)
         })
+        st.session_state["fila_resultado"] = {
+            "sucesso": False,
+            "retorno": retorno
+        }
         return False, msg
 
     resposta_completa = {
@@ -998,14 +673,18 @@ def executar_apontamento_totvs(fila_id):
             resposta_api=resposta_json
         )
 
+    st.session_state["fila_resultado"] = {
+        "sucesso": sucesso,
+        "retorno": resposta_completa
+    }
+
     if sucesso:
         atualizar_item_fila(fila_id, {
             "status": "enviado",
             "tentativas": tentativas,
             "ultimo_erro": None,
             "resposta_api": resposta_json,
-            "enviado_em": _agora_utc_iso(),
-            "usuario": usuario
+            "enviado_em": _agora_utc_iso()
         })
         return True, retorno.get("mensagem_amigavel") or f"✅ Série {numero_serie} apontada no TOTVS com sucesso."
 
@@ -1014,8 +693,7 @@ def executar_apontamento_totvs(fila_id):
         "status": "erro",
         "tentativas": tentativas,
         "ultimo_erro": msg,
-        "resposta_api": resposta_json,
-        "usuario": usuario
+        "resposta_api": resposta_json
     })
     return False, msg
 
@@ -1027,7 +705,7 @@ def salvar_apontamento(numero_serie, op, tipo_producao, usuario):
     numero_serie = _normaliza_codigo(numero_serie)
     op = _normaliza_codigo(op)
     tipo_producao = _normaliza_codigo(tipo_producao)
-    usuario = _normaliza_codigo(usuario) or st.session_state.get("usuario") or "Operador_Logado"
+    usuario = _normaliza_codigo(usuario) or "Operador_Logado"
 
     check = supabase.table("apontamentos_manga_pnm") \
         .select("id") \
@@ -1036,15 +714,7 @@ def salvar_apontamento(numero_serie, op, tipo_producao, usuario):
         .execute()
 
     if check.data:
-        return False, f"Série {numero_serie} já apontada no app.", None
-
-    verificacao = consultar_numero_serie_totvs(numero_serie)
-    if not verificacao["ok"]:
-        detalhe = f" URL: {verificacao.get('url')}" if verificacao.get("url") else ""
-        return False, verificacao["mensagem"] + detalhe, None
-
-    if verificacao["existe"]:
-        return False, f"Série {numero_serie} já está apontada no TOTVS.", None
+        return False, f"Série {numero_serie} já apontada.", None
 
     agora = _agora_utc_iso()
 
@@ -1104,7 +774,7 @@ def salvar_apontamento(numero_serie, op, tipo_producao, usuario):
         return False, str(e), None
 
 
-def carregar_apontamentos(limit=10):
+def carregar_apontamentos(limit=200):
     data = supabase.table("apontamentos_manga_pnm") \
         .select("*") \
         .order("data_hora", desc=True) \
@@ -1137,7 +807,7 @@ def processar_leitura():
                 st.session_state["numero_serie"],
                 st.session_state["op"],
                 st.session_state.get("tipo_producao"),
-                st.session_state.get("usuario")
+                st.session_state.get("usuario", "Operador_Logado")
             )
 
             if sucesso:
@@ -1158,7 +828,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
     numero_serie = _normaliza_codigo(numero_serie)
     op = _normaliza_codigo(op)
     tipo_producao = _normaliza_codigo(tipo_producao)
-    usuario = _normaliza_codigo(usuario) or st.session_state.get("usuario") or "Operador_Logado"
+    usuario = _normaliza_codigo(usuario) or "Operador_Logado"
 
     st.markdown(f"## ✔️ Checklist – Série: {numero_serie} | OP: {op} | {tipo_producao}")
 
@@ -1338,7 +1008,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
 
 
 # ==============================
-# EXIBIÇÃO RESULTADO TOTVS
+# EXIBIÇÃO DO RESULTADO DA FILA
 # ==============================
 def mostrar_resultado_totvs_visual(retorno, sucesso):
     if not retorno:
@@ -1391,351 +1061,10 @@ def mostrar_resultado_totvs_visual(retorno, sucesso):
 
 
 # ==============================
-# VISUAL CLEAN / FUTURISTA FILA
-# ==============================
-def aplicar_css_fila_clean():
-    st.markdown("""
-    <style>
-        .block-container {
-            padding-top: 1rem;
-            padding-bottom: 2rem;
-        }
-
-        .fila-box {
-            border: 1px solid rgba(20, 73, 98, 0.35);
-            border-radius: 22px;
-            padding: 18px 22px;
-            background:
-                linear-gradient(180deg, rgba(248,250,252,0.98), rgba(240,246,250,0.98));
-            box-shadow:
-                0 12px 30px rgba(15, 45, 61, 0.08),
-                inset 0 1px 0 rgba(255,255,255,0.80);
-            margin-bottom: 14px;
-        }
-
-        .fila-box-titulo {
-            font-size: 1.00rem;
-            font-weight: 800;
-            letter-spacing: 0.02em;
-            color: #0b3142;
-            margin-bottom: 8px;
-        }
-
-        .fila-box-valor {
-            font-size: 1.00rem;
-            color: #12222b;
-            min-height: 28px;
-            white-space: pre-wrap;
-            line-height: 1.45;
-        }
-
-        .fila-box-valor-retorno {
-            min-height: 60px;
-        }
-
-        .fila-secao-titulo {
-            font-size: 1.02rem;
-            font-weight: 800;
-            margin: 22px 0 12px 0;
-            color: #0b3142;
-            letter-spacing: 0.02em;
-        }
-
-        .fila-card-wrap {
-            margin-bottom: 18px;
-        }
-
-        .fila-card {
-            border-radius: 22px;
-            padding: 18px 20px;
-            color: white;
-            background:
-                radial-gradient(circle at top right, rgba(86,173,220,0.22), transparent 28%),
-                linear-gradient(135deg, #0a5b77 0%, #0d6a8c 55%, #0b4f68 100%);
-            border: 1px solid rgba(121, 201, 255, 0.22);
-            box-shadow:
-                0 14px 28px rgba(7, 50, 68, 0.20),
-                inset 0 1px 0 rgba(255,255,255,0.10);
-        }
-
-        .fila-card-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 16px;
-        }
-
-        .fila-card-left {
-            min-width: 0;
-            flex: 1;
-        }
-
-        .fila-card-indice {
-            display: inline-block;
-            font-size: 0.84rem;
-            font-weight: 800;
-            padding: 5px 10px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.12);
-            border: 1px solid rgba(255,255,255,0.14);
-            margin-bottom: 10px;
-        }
-
-        .fila-card-main {
-            font-size: 1.12rem;
-            font-weight: 800;
-            line-height: 1.35;
-            word-break: break-word;
-        }
-
-        .fila-card-meta {
-            margin-top: 10px;
-            font-size: 0.90rem;
-            color: rgba(255,255,255,0.92);
-            display: flex;
-            gap: 14px;
-            flex-wrap: wrap;
-        }
-
-        .fila-status {
-            flex-shrink: 0;
-            border-radius: 999px;
-            padding: 8px 14px;
-            font-size: 0.74rem;
-            font-weight: 900;
-            letter-spacing: 0.05em;
-            border: 1px solid rgba(255,255,255,0.16);
-            text-transform: uppercase;
-            margin-top: 2px;
-        }
-
-        .fila-status-pendente {
-            background: rgba(255,255,255,0.16);
-            color: #ffffff;
-        }
-
-        .fila-status-erro {
-            background: rgba(215, 75, 92, 0.32);
-            color: #ffffff;
-        }
-
-        .fila-status-enviado {
-            background: rgba(47, 182, 123, 0.30);
-            color: #ffffff;
-        }
-
-        .fila-acao-info {
-            font-size: 0.85rem;
-            color: #5b6a72;
-            padding: 10px 0 0 4px;
-        }
-
-        .fila-ok-pill {
-            display: inline-block;
-            margin-top: 12px;
-            padding: 8px 12px;
-            border-radius: 999px;
-            font-size: 0.78rem;
-            font-weight: 800;
-            color: #0f5132;
-            background: #d1fae5;
-            border: 1px solid #a7f3d0;
-        }
-
-        .stButton > button {
-            width: 100%;
-            min-height: 48px;
-            border-radius: 14px;
-            border: 1px solid rgba(9, 61, 82, 0.20);
-            background: linear-gradient(135deg, #0c6c8e 0%, #0b5470 100%);
-            color: white;
-            font-weight: 800;
-            letter-spacing: 0.03em;
-            box-shadow: 0 8px 18px rgba(10, 70, 94, 0.18);
-        }
-
-        .stButton > button:hover {
-            border: 1px solid rgba(9, 61, 82, 0.28);
-            background: linear-gradient(135deg, #12779b 0%, #0d617f 100%);
-            color: white;
-        }
-
-        .stButton > button:focus {
-            color: white !important;
-            box-shadow: 0 0 0 0.2rem rgba(18, 119, 155, 0.20);
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-def _ordenar_fila_visual(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-
-    coluna_ordem = "criado_em" if "criado_em" in df.columns else "data_hora"
-
-    try:
-        return df.sort_values(coluna_ordem, ascending=True, na_position="last").reset_index(drop=True)
-    except Exception:
-        return df.reset_index(drop=True)
-
-
-def _status_visual(status):
-    status = str(status or "").strip().lower()
-
-    if status == "enviado":
-        return "ENVIADO", "fila-status-enviado"
-    if status == "erro":
-        return "ERRO", "fila-status-erro"
-    return "PENDENTE", "fila-status-pendente"
-
-
-def _texto_curto(valor, tamanho=800):
-    if valor is None:
-        return ""
-
-    txt = str(valor).replace("\r", "").strip()
-    linhas = [
-        re.sub(r"\s+", " ", linha).strip()
-        for linha in txt.split("\n")
-        if linha.strip()
-    ]
-    txt = "\n".join(linhas)
-
-    if len(txt) <= tamanho:
-        return txt
-    return txt[:tamanho - 3].rstrip() + "..."
-
-
-def _resumo_boxes_fila(df: pd.DataFrame):
-    if df.empty:
-        return "-", "-", "Pendentes: 0 | Erros: 0 | Enviados: 0"
-
-    pendentes = df[df["status"].astype(str).str.lower() == "pendente"] if "status" in df.columns else pd.DataFrame()
-    base = _ordenar_fila_visual(pendentes if not pendentes.empty else df)
-    linha = base.iloc[0]
-
-    em_processo = (
-        f"OP {_normaliza_codigo(linha.get('op')) or '-'} | "
-        f"Série {_normaliza_codigo(linha.get('numero_serie')) or '-'} | "
-        f"{_normaliza_codigo(linha.get('tipo_producao')) or '-'}"
-    )
-
-    retorno = "-"
-    df_recente = df.copy()
-    coluna_ordem = "criado_em" if "criado_em" in df_recente.columns else "data_hora"
-    try:
-        df_recente = df_recente.sort_values(coluna_ordem, ascending=False, na_position="last")
-    except Exception:
-        pass
-
-    for _, row in df_recente.iterrows():
-        resposta_api = _parse_resposta_api(row.get("resposta_api"))
-        if isinstance(resposta_api, dict):
-            retorno = (
-                resposta_api.get("mensagem_tela")
-                or resposta_api.get("mensagem_amigavel")
-                or resposta_api.get("body")
-                or "-"
-            )
-            retorno = _texto_curto(retorno, 800)
-            if retorno and retorno != "-":
-                break
-
-        ultimo_erro = row.get("ultimo_erro")
-        if ultimo_erro:
-            retorno = _texto_curto(ultimo_erro, 800)
-            break
-
-    qtd_pendente = int((df["status"] == "pendente").sum()) if "status" in df.columns else 0
-    qtd_erro = int((df["status"] == "erro").sum()) if "status" in df.columns else 0
-    qtd_enviado = int((df["status"] == "enviado").sum()) if "status" in df.columns else 0
-
-    tabela = f"Pendentes: {qtd_pendente} | Erros: {qtd_erro} | Enviados: {qtd_enviado}"
-    return em_processo, retorno, tabela
-
-
-def _render_box_fila(titulo, valor, retorno=False):
-    classe = "fila-box-valor fila-box-valor-retorno" if retorno else "fila-box-valor"
-    st.markdown(
-        f"""
-        <div class="fila-box">
-            <div class="fila-box-titulo">{escape(titulo)}</div>
-            <div class="{classe}">{escape(valor or "-")}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-def _render_cards_fila(df: pd.DataFrame):
-    if df.empty:
-        st.info("Nenhum item na fila.")
-        return
-
-    df = _ordenar_fila_visual(df)
-
-    for idx, (_, row) in enumerate(df.iterrows(), start=1):
-        fila_id = int(row["id"])
-        status = str(row.get("status", ""))
-        numero_serie = _normaliza_codigo(row.get("numero_serie"))
-        op = _normaliza_codigo(row.get("op"))
-        tipo = _normaliza_codigo(row.get("tipo_producao"))
-        dt = _fmt_data(row.get("data_hora"))
-        tentativas = int(row.get("tentativas") or 0)
-
-        status_label, status_class = _status_visual(status)
-
-        card_html = f"""
-        <div class="fila-card-wrap">
-            <div class="fila-card">
-                <div class="fila-card-top">
-                    <div class="fila-card-left">
-                        <div class="fila-card-indice">ITEM {idx}</div>
-                        <div class="fila-card-main">
-                            OP: {escape(op or '-')} | NÚMERO DE SÉRIE: {escape(numero_serie or '-')}
-                        </div>
-                        <div class="fila-card-meta">
-                            <span><b>Tipo:</b> {escape(tipo or '-')}</span>
-                            <span><b>Data:</b> {escape(dt)}</span>
-                            <span><b>Tentativas:</b> {tentativas}</span>
-                        </div>
-                    </div>
-                    <div class="fila-status {status_class}">{escape(status_label)}</div>
-                </div>
-            </div>
-        </div>
-        """
-        st.markdown(card_html, unsafe_allow_html=True)
-
-        if status == "enviado":
-            st.markdown(
-                '<div class="fila-ok-pill">Enviado com sucesso</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            c1, c2 = st.columns([8, 2])
-            with c1:
-                st.markdown(
-                    '<div class="fila-acao-info">Pronto para execução manual no TOTVS.</div>',
-                    unsafe_allow_html=True
-                )
-            with c2:
-                rotulo = "APONTAR" if status == "pendente" else "REENVIAR"
-                if st.button(rotulo, key=f"btn_apontar_clean_{fila_id}", use_container_width=True):
-                    ok, msg = executar_apontamento_totvs(fila_id)
-                    st.session_state["fila_feedback"] = ("success", msg) if ok else ("error", msg)
-                    st.rerun()
-
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
-
-# ==============================
 # PÁGINAS
 # ==============================
 def pagina_apontamento():
-    st.title(APP_NAME)
-    st.caption("Apontamento de produção")
+    st.title("📦 Apontamento MANGA / PNM")
 
     st.radio(
         "Tipo do Produto",
@@ -1788,12 +1117,20 @@ def pagina_apontamento():
 
 
 def pagina_fila():
-    aplicar_css_fila_clean()
-
     st.title("📮 Fila de Apontamento TOTVS")
     st.caption("O apontamento no TOTVS só acontece ao clicar em 'Apontar'. O histórico antigo não é enviado sozinho.")
 
     _mostrar_feedback_fila()
+
+    resultado_fila = st.session_state.pop("fila_resultado", None)
+    if resultado_fila:
+        st.divider()
+        st.subheader("Último retorno do TOTVS")
+        mostrar_resultado_totvs_visual(
+            retorno=resultado_fila.get("retorno"),
+            sucesso=resultado_fila.get("sucesso", False)
+        )
+        st.divider()
 
     mapa_status = {
         "Pendentes": "pendente",
@@ -1802,16 +1139,13 @@ def pagina_fila():
         "Todos": None
     }
 
-    col1, col2 = st.columns([2, 2])
-    with col1:
-        filtro = st.radio(
-            "Status",
-            ["Pendentes", "Erros", "Enviados", "Todos"],
-            horizontal=True
-        )
-    with col2:
-        busca = st.text_input("Filtrar por número de série ou OP", "")
+    filtro = st.radio(
+        "Status",
+        ["Pendentes", "Erros", "Enviados", "Todos"],
+        horizontal=True
+    )
 
+    busca = st.text_input("Filtrar por número de série ou OP", "")
     df = carregar_fila_totvs(status=mapa_status[filtro], limit=300)
 
     if not df.empty and busca.strip():
@@ -1825,23 +1159,68 @@ def pagina_fila():
         st.info("Nenhum item na fila para o filtro selecionado.")
         return
 
-    df_topo = df.copy()
-    try:
-        df_topo = df_topo.sort_values("criado_em", ascending=False, na_position="last").head(5)
-        df_topo = df_topo.iloc[::-1].reset_index(drop=True)
-    except Exception:
-        df_topo = df_topo.head(5).iloc[::-1].reset_index(drop=True)
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Pendentes", int((df["status"] == "pendente").sum()) if "status" in df.columns else 0)
+    col_b.metric("Erros", int((df["status"] == "erro").sum()) if "status" in df.columns else 0)
+    col_c.metric("Enviados", int((df["status"] == "enviado").sum()) if "status" in df.columns else 0)
 
-    em_processo, retorno, tabela = _resumo_boxes_fila(df_topo)
+    cols_show = [c for c in [
+        "id", "numero_serie", "op", "tipo_producao", "usuario",
+        "status", "tentativas", "data_hora", "criado_em", "enviado_em", "ultimo_erro"
+    ] if c in df.columns]
 
-    _render_box_fila("EM PROCESSO:", em_processo)
-    _render_box_fila("RETORNO:", retorno, retorno=True)
+    st.dataframe(df[cols_show], use_container_width=True)
 
-    st.markdown('<div class="fila-secao-titulo">FILA VISUAL</div>', unsafe_allow_html=True)
-    _render_cards_fila(df)
+    st.divider()
+    st.subheader("Ações da fila")
 
-    st.markdown('<div class="fila-secao-titulo">TABELA</div>', unsafe_allow_html=True)
-    _render_box_fila("TABELA:", tabela)
+    for _, row in df.iterrows():
+        fila_id = int(row["id"])
+        status = str(row.get("status", ""))
+        numero_serie = _normaliza_codigo(row.get("numero_serie"))
+        op = _normaliza_codigo(row.get("op"))
+        tipo = _normaliza_codigo(row.get("tipo_producao"))
+        tentativas = int(row.get("tentativas") or 0)
+        ultimo_erro = row.get("ultimo_erro") or "-"
+        resposta_api = _parse_resposta_api(row.get("resposta_api"))
+
+        with st.container(border=True):
+            c1, c2, c3, c4, c5 = st.columns([2.0, 2.0, 1.3, 2.2, 1.6])
+
+            c1.markdown(
+                f"**Série:** {numero_serie or '-'}\n\n"
+                f"**OP:** {op or '-'}"
+            )
+            c2.markdown(
+                f"**Tipo:** {tipo or '-'}\n\n"
+                f"**Usuário:** {row.get('usuario') or '-'}"
+            )
+            c3.markdown(
+                f"**Status:** {status}\n\n"
+                f"**Tentativas:** {tentativas}"
+            )
+            c4.markdown(
+                f"**Data:** {_fmt_data(row.get('data_hora'))}\n\n"
+                f"**Último erro:** {ultimo_erro}"
+            )
+
+            if status == "enviado":
+                c5.success("Enviado")
+            else:
+                if c5.button("Apontar", key=f"btn_apontar_{fila_id}", use_container_width=True):
+                    ok, msg = executar_apontamento_totvs(fila_id)
+                    st.session_state["fila_feedback"] = ("success", msg) if ok else ("error", msg)
+                    st.rerun()
+
+            if resposta_api:
+                with st.expander(f"Detalhes retorno TOTVS - fila {fila_id}"):
+                    mostrar_resultado_totvs_visual(
+                        retorno=resposta_api,
+                        sucesso=(status == "enviado")
+                    )
+            elif row.get("resposta_api"):
+                with st.expander(f"Detalhes retorno TOTVS - fila {fila_id}"):
+                    st.code(str(row.get("resposta_api")), language=None)
 
 
 def pagina_checklist():
@@ -1904,47 +1283,28 @@ def pagina_checklist():
     checklist_qualidade_manga_pnm(
         numero_serie,
         linha["tipo_producao"],
-        st.session_state.get("usuario"),
+        st.session_state.get("usuario", "Operador_Logado"),
         linha["op"]
     )
 
 
 def pagina_teste_totvs():
     st.title("🧪 Teste de Apontamento TOTVS")
-    st.caption("Teste direto do POST /NEW, com checagem prévia da série no GET.")
+    st.caption("Teste direto do POST /NEW, sem fila e sem consulta prévia no SD3.")
 
     with st.form("form_teste_apontamento"):
-        numero_serie = st.text_input("Número de série", placeholder="Ex.: 260319859")
-        op = st.text_input("OP", placeholder="Ex.: 95252501001")
+        op = st.text_input("OP", placeholder="Ex.: x0217301001")
         quant = st.text_input("Quantidade", value="1", placeholder="Ex.: 1")
         lotectl = st.text_input(
-            "Lote / Número de Série",
-            value=numero_serie,
-            placeholder="Ex.: 260319859"
+            "Lote / Número de Série (opcional)",
+            placeholder="Deixe em branco para enviar espaço"
         )
 
-        submit_verificar = st.form_submit_button("Verificar série", use_container_width=True)
-        submit_apontar = st.form_submit_button("Apontar", use_container_width=True)
+        submit = st.form_submit_button("Apontar", use_container_width=True)
 
-    if submit_verificar:
-        retorno = consultar_numero_serie_totvs(numero_serie)
-        if retorno["ok"]:
-            if retorno["existe"]:
-                st.warning(retorno["mensagem"])
-            else:
-                st.success(retorno["mensagem"])
-        else:
-            st.error(retorno["mensagem"])
-
-    if submit_apontar:
-        retorno_check = consultar_numero_serie_totvs(numero_serie)
-        if not retorno_check["ok"]:
-            st.error(retorno_check["mensagem"])
-        elif retorno_check["existe"]:
-            st.warning(f"Série {numero_serie} já está apontada no TOTVS.")
-        else:
-            sucesso, retorno = apontar_op_totvs(op, quant, lotectl or numero_serie)
-            mostrar_resultado_totvs_visual(retorno=retorno, sucesso=sucesso)
+    if submit:
+        sucesso, retorno = apontar_op_totvs(op, quant, lotectl)
+        mostrar_resultado_totvs_visual(retorno=retorno, sucesso=sucesso)
 
     st.divider()
 
@@ -1953,22 +1313,18 @@ def pagina_teste_totvs():
         st.write("**TOTVS_TIMEOUT:**", TOTVS_TIMEOUT)
         st.write("**TOTVS_USERNAME:**", TOTVS_USERNAME if TOTVS_USERNAME else "(vazio)")
         st.write("**TOTVS_TENANT_ID:**", TOTVS_TENANT_ID if TOTVS_TENANT_ID else "(vazio)")
-        st.write("**Usuário logado:**", st.session_state.get("usuario", "-"))
+        st.write("**TOTVS_PASSWORD:**", "********" if TOTVS_PASSWORD else "(vazio)")
 
 
 # ==============================
 # APP
 # ==============================
 def app():
-    inicializar_estado()
-    exigir_login()
+    if "usuario" not in st.session_state:
+        st.session_state["usuario"] = "Operador_Logado"
 
-    with st.sidebar:
-        st.markdown(f"### {APP_NAME}")
-        st.write(f"👤 **{st.session_state.get('usuario', '-')}**")
-        if st.button("Sair", use_container_width=True):
-            logout_app()
-            st.rerun()
+    if "tipo_producao" not in st.session_state:
+        st.session_state["tipo_producao"] = "MANGA"
 
     menu = st.sidebar.radio(
         "Menu",
