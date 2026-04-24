@@ -844,7 +844,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         "Pintura do eixo livre de oxidação, isento de escorrimento, pontos sem tinta e camada conforme padrão?",
         "Os cordões de solda do eixo estão conformes?",
         "As caixas estão corretas? Escreva qual o modelo:",
-        "As porcas da bolsa dos suspensores estão devidamente assentadas e apertadas?"
+        "As porcas da bolsa dos suspensores estão devidamente assentadas e apertadas?",
         "Etiqueta pede suspensor?",
         "Etiqueta pede Sem Suporte da Bolsa (S/AP)?",
         "Etiqueta pede Mão Francesa?"
