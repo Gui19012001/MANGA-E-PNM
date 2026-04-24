@@ -865,7 +865,7 @@ def checklist_qualidade_manga_pnm(numero_serie, tipo_producao, usuario, op):
         9: "PINTURA_EIXO",
         10: "SOLDA",
         11: "CAIXAS",
-        12: "PORCAS";
+        12: "PORCAS",
         13: "FALTA_SUSPENSOR",
         14: "FALTA_SPT_BOLSA",
         15: "FALTA_MAO_FRANCESA",
